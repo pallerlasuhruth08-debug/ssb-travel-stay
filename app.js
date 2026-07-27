@@ -157,6 +157,9 @@ function render() {
 }
 
 function viewBody() {
+  // A view whose tab isn't shown for this role must never render either — goView() and
+  // loadAll()'s stale S.view both funnel through here, so this is the one place that matters.
+  if (!allowedTabs().some(t => t.id === S.view)) S.view = allowedTabs()[0]?.id || 'submit';
   switch (S.view) {
     case 'submit': return submitView();
     case 'coord':  return coordView();
