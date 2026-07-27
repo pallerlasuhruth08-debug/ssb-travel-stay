@@ -42,6 +42,7 @@ const S = {
   mode: 'individual', ticketPref: 'collective',
   solo: blankTrav(), travForm: [], pocTravels: false,
   form: {}, open: new Set(), busy: false, authMode: 'signin',
+  deskFilter: 'pending',
 };
 
 /* ---------------- helpers ---------------- */
@@ -620,16 +621,26 @@ window.decide = async (id, decision) => {
 /* ---------------- 3 · travel desk & 4 · accommodation ---------------- */
 function deskView(which) {
   const isTravel = which === 'travel';
+  const done = S.deskFilter === 'done';
   const head = isTravel
     ? { t: 'Travel desk — book tickets', p: 'Approved requests await ticketing. Enter the PNR / ticket reference (or a collective reference), attach the booked ticket, then confirm to notify the requester and pass on for bed allotment.' }
     : { t: 'Accommodation — allot beds', p: 'Ticketed travellers await a bed. Pick a free bed from the master for each person, then confirm to complete and notify.' };
-  const items = S.requests.filter(r => r.status === (isTravel ? 'approved' : 'booked'));
+  const pendingStatus = isTravel ? 'approved' : 'booked';
+  const doneStatuses = isTravel ? ['booked', 'complete'] : ['complete'];
+  const items = S.requests.filter(r => done ? doneStatuses.includes(r.status) : r.status === pendingStatus);
+  const emptyMsg = done
+    ? (isTravel ? 'No booked tickets yet.' : 'No housed travellers yet.')
+    : (isTravel ? 'No approved requests waiting for tickets.' : 'No ticketed travellers waiting for beds.');
   return `<div class="view active">
     <div class="view-head"><h2>${head.t}</h2><p>${head.p}</p></div>
-    ${listOrEmpty(items, isTravel ? travelInner : accomInner,
-      isTravel ? 'No approved requests waiting for tickets.' : 'No ticketed travellers waiting for beds.')}
+    <div class="seg" style="margin-bottom:18px">
+      <button class="${!done ? 'on' : ''}" onclick="setDeskFilter('pending')">${isTravel ? 'Awaiting ticket' : 'Awaiting bed'}</button>
+      <button class="${done ? 'on' : ''}" onclick="setDeskFilter('done')">${isTravel ? 'Booked' : 'Housed'}</button>
+    </div>
+    ${listOrEmpty(items, isTravel ? travelInner : accomInner, emptyMsg)}
   </div>`;
 }
+window.setDeskFilter = f => { S.deskFilter = f; render(); };
 
 function travelInner(r) {
   const list = travellers(r);
@@ -648,8 +659,8 @@ function travelInner(r) {
     <input type="file" accept="image/*,.pdf" hidden id="tktFile-${r.id}" onchange="ticketPicked('${r.id}')">
   </div>
   <div class="actions">
-    <button class="btn btn-primary btn-sm" onclick="book('${r.id}',${collective})">Confirm booking &amp; notify</button>
-    <span class="hint">Emails the ticket to ${esc(r.contact_email || 'the requester')} and passes on for bed allotment.</span>
+    <button class="btn btn-primary btn-sm" onclick="book('${r.id}',${collective})">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'} &amp; notify</button>
+    <span class="hint">${r.status === 'approved' ? `Emails the ticket to ${esc(r.contact_email || 'the requester')} and passes on for bed allotment.` : 'Corrects the PNR / ticket already on file.'}</span>
   </div>`;
 }
 
@@ -705,10 +716,12 @@ function accomInner(r) {
       <select onchange="setBed('${p.id}',this.value)">${bedOptions(null)}</select></div>`;
   }).join('');
   return `<div class="workbox"><label>Bed allotment at SSB</label>${rows}</div>
-  <div class="actions">
-    <button class="btn btn-primary btn-sm" onclick="completeReq('${r.id}')">Allot beds &amp; confirm</button>
-    <span class="hint">Sends final stay details to ${esc(r.contact_email || 'the requester')}.</span>
-  </div>`;
+  ${r.status === 'complete'
+    ? `<div class="hint" style="margin-top:10px">All travellers housed. Use "Change" above to reassign a bed if needed.</div>`
+    : `<div class="actions">
+        <button class="btn btn-primary btn-sm" onclick="completeReq('${r.id}')">Allot beds &amp; confirm</button>
+        <span class="hint">Sends final stay details to ${esc(r.contact_email || 'the requester')}.</span>
+      </div>`}`;
 }
 
 function bedOptions(selected) {
