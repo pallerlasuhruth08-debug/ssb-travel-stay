@@ -142,8 +142,10 @@
   table.master tr:last-child td{border-bottom:none}
   .occ .bar{height:6px;border-radius:3px;background:var(--band);margin-top:4px;overflow:hidden}
   .occ .bar span{display:block;height:100%;background:var(--saffron)}
-  .alloc-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+  .alloc-row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
   .alloc-row .field{flex:1;min-width:150px;margin:0}
+  .alloc-row .field.btn-field{flex:0 0 auto}
+  .alloc-row .field.btn-field label{visibility:hidden}
 
   .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:22px}
   @media(max-width:640px){.stats{grid-template-columns:1fr 1fr}}
@@ -181,10 +183,12 @@
     .view-head h2{font-size:23px}
     .card.pad,.pad{padding:16px}
     /* the freed-up width from the tighter padding above is just enough for two .field's to wrap onto
-       one row, which then looks broken because align-items:flex-end staggers them by label height —
-       force a single column instead of leaving it to flex-wrap's judgment */
+       one row, which then looks broken since a stacked column is clearer at this width anyway */
     .alloc-row{flex-direction:column;align-items:stretch}
     .alloc-row .field{width:100%}
+    /* the hidden label on .btn-field only exists to align the button with the inputs in a row;
+       stacked single-column it's just dead space, so collapse it */
+    .alloc-row .btn-field label{display:none}
   }
   @media(max-width:480px){
     /* once the title block and the status/mode chips can't share a line, drop the chips to their own row

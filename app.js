@@ -1159,7 +1159,7 @@ function masterView() {
         <div class="field"><label>Location / block</label><input id="acLoc" placeholder="e.g. Anna Block A"></div>
         <div class="field"><label>Bed numbers</label><input id="acBeds" placeholder="e.g. 101-110  or  1,2,3">
           <div class="hint">Range (101-110) or comma list (1,2,3).</div></div>
-        <button class="btn btn-primary" onclick="addBeds()">Add beds</button>
+        <div class="field btn-field"><label>Add</label><button class="btn btn-primary" onclick="addBeds()">Add beds</button></div>
       </div>
     </div>` : ''}
     ${canEdit && locs.length ? `<div class="card pad" style="margin-bottom:22px">
@@ -1170,7 +1170,7 @@ function masterView() {
         </select></div>
         <div class="field"><label>Bed numbers</label><input id="rmBeds" placeholder="e.g. 101-110  or  1,2,3">
           <div class="hint">Range (101-110) or comma list (1,2,3). A bed already allotted to someone is left in place.</div></div>
-        <button class="btn btn-ghost" onclick="removeBeds()">Remove beds</button>
+        <div class="field btn-field"><label>Remove</label><button class="btn btn-ghost" onclick="removeBeds()">Remove beds</button></div>
       </div>
     </div>` : ''}
     <div class="card pad">
