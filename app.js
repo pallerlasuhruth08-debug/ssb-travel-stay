@@ -153,7 +153,6 @@ function render() {
           <span>${esc(ROLE_LABEL[role()] || role())}${S.profile?.team ? ' · ' + esc(S.profile.team) : ''}</span>
         </div>
         <button class="btn-out" onclick="signOut()">Sign out</button>
-        <div class="om">ॐ</div>
       </div>
     </div>
   </header>
