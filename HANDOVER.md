@@ -86,6 +86,12 @@ short-lived signed URLs.
 A bed cannot be double-booked: `mkn_tr_set_bed` rejects a bed already held by another traveller, and reassigning
 a traveller frees their previous bed automatically.
 
+Both desks keep a **Pending / Done** toggle so a completed step stays reachable instead of disappearing. Travel
+desk's toggle is *Awaiting ticket* / *Booked* — the Booked side shows already-ticketed requests and lets the desk
+correct a PNR via the same "Update booking" action (`mkn_tr_book` now accepts corrections on `booked`/`complete`
+requests, not just `approved` ones). Accommodation's toggle is *Awaiting bed* / *Housed* — the Housed side shows
+fully-allotted requests, and "Change" next to any traveller's bed still works there to reassign it.
+
 ## Test accounts
 
 Password for all five: `SSBtest2026!`
