@@ -3,17 +3,15 @@ const SUPABASE_URL='https://zbqetpvgipgagmmyupcn.supabase.co';
 const SUPABASE_KEY='sb_publishable_9N-AtGZTNYsOLNAYj1W8AQ_ya6ccY6C';
 const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 
-const MODES=['Train','Flight','Organized bus (IYC → SSB)','Dedicated team bus (by SSB)'];
+const MODES=['Train','Flight','Bus (general, not organised)'];
 const STATIONS=['KSR Bengaluru (SBC)','Yesvantpur Jn (YPR)','Bengaluru Cantt (BNC)','KR Puram (KJM)'];
 const LASTMILE=['Isha shuttle bus (→ SSB)','Shared taxi with co-Isha travellers','Shared bus with co-Isha travellers',"I'll arrange my own"];
 const REGIONS=['South India','North India','East India','West India','Central India','North East India','APAC','Middle East','North America','Europe','Other'];
 const GENDERS=['Male','Female','Other'];
 const AIRPORT='Kempegowda Intl, Bengaluru (BLR)';
-const IYC='Isha Yoga Center, Coimbatore';
-const SSB='Isha SSB, Bengaluru';
 const DEF_IN='2026-09-27', DEF_OUT='2026-10-02';
 
-const REQ_COLS=['request_id','batch_id','created_at','created_by','requester_type','poc_name','poc_team','poc_phone','poc_email','traveller_type','name','role','age','gender','region','phone','email','check_in','check_out','travel_mode','from_location','to_location','preferred_option','arrival','last_mile','id_token','id_type','id_number_masked','id_image_path','id_status','approval_status','approved_at','rejection_reason','stay_status','stay_location','stay_bed_no','stay_allocation','travel_status','travel_allocation','ticket_path','confirmed'].join(',');
+const REQ_COLS=['request_id','batch_id','created_at','created_by','requester_type','poc_name','poc_team','poc_phone','poc_email','traveller_type','name','role','age','gender','region','phone','email','check_in','check_out','travel_mode','from_location','to_location','train_name','train_number','flight_name','flight_number','bus_name','arrival','last_mile','id_token','id_type','id_number_masked','id_image_path','id_status','approval_status','approved_at','rejection_reason','stay_status','stay_location','stay_bed_no','stay_allocation','travel_status','travel_allocation','ticket_path','confirmed'].join(',');
 
 const ROLE_LABEL={requester:'Requester',poc:'Team POC',coordinator:'Coordinator',travel_desk:'Travel Desk',accommodation_desk:'Accommodation Desk',admin:'Admin'};
 
@@ -31,7 +29,8 @@ const S={session:null,profile:null,view:'request',requests:[],users:[],teams:[],
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const MON=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const fmt=d=>{if(!d)return '—';const p=String(d).split('-');return p.length===3?`${p[2]} ${MON[+p[1]]}`:d;};
-const needsLastMile=m=>m==='Train'||m==='Flight';
+const needsLastMile=m=>m==='Train'||m==='Flight'||m==='Bus (general, not organised)';
+const travelDetailText=r=>r.travel_mode==='Train'?[r.train_name,r.train_number].filter(Boolean).join(' · '):r.travel_mode==='Flight'?[r.flight_name,r.flight_number].filter(Boolean).join(' · '):r.travel_mode==='Bus (general, not organised)'?(r.bus_name||''):'';
 const mask=(n,t)=>{n=String(n||'');if(n.length<3)return n;return t==='Aadhaar'?'XXXX-XXXX-'+n.slice(-4):n.slice(0,2)+'••••'+n.slice(-2);};
 const el=id=>document.getElementById(id);
 const val=id=>(el(id)?.value||'').trim();
@@ -219,39 +218,31 @@ function travelDetail(mode){
  const f=S.form;
  if(mode==='Train'||mode==='Flight'){
   const isTrain=mode==='Train';
-  const list=isTrain?S.trains:S.flights;
-  const key=isTrain?'train':'flight';
-  const sub=r=>isTrain?`${r.route||''} · ${r.arrival||''}`:`${r.airline||''} · ${r.arrival||''}`;
   return `
   <div class="row">
    <div class="field"><label>From *</label><input type="text" id="from" placeholder="Origin city" value="${esc(f.from||'')}"></div>
    <div class="field"><label>${isTrain?'To (destination station)':'To (arrival airport)'}</label>
     ${isTrain?`<select id="toPoint">${STATIONS.map(s=>`<option ${f.toPoint===s?'selected':''}>${s}</option>`).join('')}</select>`:`<input type="text" id="toPoint" class="locked" value="${AIRPORT}" disabled>`}</div>
   </div>
-  <div class="field"><label>Preferred ${isTrain?'train':'flight'} — the travel desk will book this for you</label>
-   <div class="recs">
-    ${list.map(r=>`<button class="rec ${f.pref===r[key]?'on':''}" onclick="setPref(this.dataset.v)" data-v="${esc(r[key])}"><span><span class="rmain">${esc(r[key])}</span><span class="rsub">${esc(sub(r))}</span></span>${r.recommended?'<span class="rec-badge">Recommended</span>':''}</button>`).join('')}
-    <button class="rec ${f.pref==='No preference — desk to decide'?'on':''}" onclick="setPref(this.dataset.v)" data-v="No preference — desk to decide"><span><span class="rmain">No preference</span><span class="rsub">Let the travel desk choose</span></span></button>
-   </div></div>
+  <div class="row">
+   <div class="field"><label>${isTrain?'Train name':'Flight name / airline'} *</label><input type="text" id="${isTrain?'trainName':'flightName'}" placeholder="${isTrain?'e.g. Bengaluru Mail':'e.g. IndiGo'}" value="${esc(f[isTrain?'trainName':'flightName']||'')}"></div>
+   <div class="field"><label>${isTrain?'Train number':'Flight number'} *</label><input type="text" id="${isTrain?'trainNumber':'flightNumber'}" placeholder="${isTrain?'e.g. 12658':'e.g. 6E 204'}" value="${esc(f[isTrain?'trainNumber':'flightNumber']||'')}"></div>
+  </div>
   <div class="field"><label>Preferred arrival date &amp; time (optional)</label><input type="text" id="arrivalTime" placeholder="e.g. 27 Sep · 06:30" value="${esc(f.arrivalTime||'')}"></div>
   <div class="hint">Coming into Bengaluru — choose how to reach SSB. Sharing with co-Isha travellers is encouraged. 🙏</div>
   <div class="field"><label>Getting from ${isTrain?'station':'airport'} to SSB *</label>
    <div class="chips">${LASTMILE.map(l=>`<button class="chip ${f.lastMile===l?'on':''}" onclick="setLastMile(this.dataset.v)" data-v="${esc(l)}">${esc(l)}</button>`).join('')}</div></div>`;
  }
- if(mode==='Organized bus (IYC → SSB)')return `
-  <div class="row">
-   <div class="field"><label>From</label><input type="text" id="from" class="locked" value="${IYC}" disabled></div>
-   <div class="field"><label>To</label><input type="text" id="toPoint" class="locked" value="${SSB}" disabled></div>
-  </div>
-  <div class="hint">Direct IYC → SSB — no separate last-mile transport needed. 🙏</div>
-  <div class="field"><label>Preferred boarding time at IYC (optional)</label><input type="text" id="arrivalTime" placeholder="e.g. 26 Sep · night" value="${esc(f.arrivalTime||'')}"></div>`;
  return `
   <div class="row">
-   <div class="field"><label>From (team pickup point) *</label><input type="text" id="from" placeholder="e.g. Chennai centre" value="${esc(f.from||'')}"></div>
-   <div class="field"><label>To</label><input type="text" id="toPoint" class="locked" value="${SSB}" disabled></div>
+   <div class="field"><label>From *</label><input type="text" id="from" placeholder="Origin city / boarding point" value="${esc(f.from||'')}"></div>
+   <div class="field"><label>To *</label><input type="text" id="toPoint" placeholder="Arrival city / bus stand" value="${esc(f.toPoint||'')}"></div>
   </div>
-  <div class="hint">A dedicated bus arranged by SSB, straight to the venue — no separate last-mile needed.</div>
-  <div class="field"><label>Preferred boarding time (optional)</label><input type="text" id="arrivalTime" placeholder="e.g. 27 Sep · early morning" value="${esc(f.arrivalTime||'')}"></div>`;
+  <div class="field"><label>Bus name / operator *</label><input type="text" id="busName" placeholder="e.g. KSRTC Airavat" value="${esc(f.busName||'')}"></div>
+  <div class="field"><label>Preferred arrival date &amp; time (optional)</label><input type="text" id="arrivalTime" placeholder="e.g. 27 Sep · 06:30" value="${esc(f.arrivalTime||'')}"></div>
+  <div class="hint">A general/public bus, not one organised by SSB or IYC — choose how to reach SSB from the drop point. 🙏</div>
+  <div class="field"><label>Getting to SSB *</label>
+   <div class="chips">${LASTMILE.map(l=>`<button class="chip ${f.lastMile===l?'on':''}" onclick="setLastMile(this.dataset.v)" data-v="${esc(l)}">${esc(l)}</button>`).join('')}</div></div>`;
 }
 
 function idBlock(p,f){
@@ -267,14 +258,13 @@ function idBlock(p,f){
   <p class="privacy">🔒 Your ID is used only for travel booking by the SSB coordination team, and is not shared elsewhere.</p>`;
 }
 
-window.setMode=m=>{captureSelf();S.form.mode=m;S.form.pref='';S.form.lastMile='';render();};
-window.setPref=v=>{captureSelf();S.form.pref=v;render();};
+window.setMode=m=>{captureSelf();S.form.mode=m;S.form.trainName=S.form.trainNumber=S.form.flightName=S.form.flightNumber=S.form.busName='';S.form.lastMile='';render();};
 window.setLastMile=v=>{captureSelf();S.form.lastMile=v;render();};
 window.setIdType=(p,t)=>{captureSelf();S.form[p+'IdType']=t;S.form[p+'IdNum']='';S.form[p+'File']=null;render();};
 
 function captureSelf(){
  const f=S.form;
- ['name','region','age','gender','phone','email','checkIn','checkOut','from','toPoint','arrivalTime','departTime'].forEach(k=>{if(el(k))f[k]=el(k).value;});
+ ['name','region','age','gender','phone','email','checkIn','checkOut','from','toPoint','arrivalTime','departTime','trainName','trainNumber','flightName','flightNumber','busName'].forEach(k=>{if(el(k))f[k]=el(k).value;});
  ['self','up'].forEach(p=>{if(el(p+'_idNum'))f[p+'IdNum']=el(p+'_idNum').value;});
 }
 
@@ -290,9 +280,12 @@ async function submitSelf(){
  const f=S.form,miss=[];
  if(!f.name)miss.push('name');
  if(!f.mode)miss.push('travel mode');
- if(needsLastMile(f.mode)&&!f.lastMile)miss.push('station/airport → SSB');
- if(needsLastMile(f.mode)&&!f.from)miss.push('from');
- if(f.mode==='Dedicated team bus (by SSB)'&&!f.from)miss.push('team pickup point');
+ if(f.mode&&!f.from)miss.push('from');
+ if(f.mode==='Bus (general, not organised)'&&!f.toPoint)miss.push('to');
+ if(f.mode==='Train'&&(!f.trainName||!f.trainNumber))miss.push('train name & number');
+ if(f.mode==='Flight'&&(!f.flightName||!f.flightNumber))miss.push('flight name & number');
+ if(f.mode==='Bus (general, not organised)'&&!f.busName)miss.push('bus name');
+ if(needsLastMile(f.mode)&&!f.lastMile)miss.push('station/airport/bus stand → SSB');
  if(!f.selfIdType||!f.selfIdNum||!f.selfFile)miss.push('ID type, number & image');
  if(miss.length)return flash(false,'Please complete: '+miss.join(', '));
  if(f.selfIdType==='Aadhaar'&&!/^\d{12}$/.test(f.selfIdNum.trim()))return flash(false,'Aadhaar must be 12 digits.');
@@ -301,15 +294,17 @@ async function submitSelf(){
   const path=`ids/${S.session.user.id}-${Date.now()}-${f.selfFile.name.replace(/[^\w.\-]/g,'_')}`;
   const up=await sb.storage.from('mkn-ids').upload(path,f.selfFile);
   if(up.error)throw up.error;
-  const to=f.mode==='Train'?(f.toPoint||STATIONS[0]):f.mode==='Flight'?AIRPORT:SSB;
-  const from=f.mode==='Organized bus (IYC → SSB)'?IYC:(f.from||'');
+  const to=f.mode==='Train'?(f.toPoint||STATIONS[0]):f.mode==='Flight'?AIRPORT:(f.toPoint||'');
   const row={requester_type:S.reqType,created_by:S.session.user.id,name:f.name,
    role:S.reqType==='core'?'Core volunteer':'Poornanga (IYC)',
    age:f.age?parseInt(f.age,10):null,gender:f.gender||null,region:f.region||null,
    phone:f.phone||null,email:f.email||null,
    check_in:f.checkIn||DEF_IN,check_out:f.checkOut||DEF_OUT,
-   travel_mode:f.mode,from_location:from,to_location:to,
-   preferred_option:f.pref||null,arrival:f.arrivalTime||null,
+   travel_mode:f.mode,from_location:f.from||'',to_location:to,
+   train_name:f.mode==='Train'?f.trainName:null,train_number:f.mode==='Train'?f.trainNumber:null,
+   flight_name:f.mode==='Flight'?f.flightName:null,flight_number:f.mode==='Flight'?f.flightNumber:null,
+   bus_name:f.mode==='Bus (general, not organised)'?f.busName:null,
+   arrival:f.arrivalTime||null,
    last_mile:needsLastMile(f.mode)?f.lastMile:null,
    id_type:f.selfIdType,id_number:f.selfIdNum.trim(),
    id_number_masked:mask(f.selfIdNum.trim(),f.selfIdType),
@@ -323,7 +318,7 @@ async function submitSelf(){
  }catch(e){S.busy=false;flash(false,e.message||String(e));}
 }
 
-const blankRow=()=>({name:'',forType:'Team member',age:'',gender:'',phone:'',email:'',mode:'',from:'',pref:'',arrival:'',lastmile:'',checkIn:DEF_IN,checkOut:DEF_OUT});
+const blankRow=()=>({name:'',forType:'Team member',age:'',gender:'',phone:'',email:'',mode:'',from:'',to:'',detailName:'',detailNumber:'',arrival:'',lastmile:'',checkIn:DEF_IN,checkOut:DEF_OUT});
 
 function pocForm(){
  const f=S.form;
@@ -339,7 +334,7 @@ function pocForm(){
    <div class="field"><label>Your email</label><input type="email" id="pocEmail" placeholder="you@example.com" value="${esc(f.pocEmail||S.profile.email||'')}"></div>
   </div>
   <div class="grp-title">Travellers (team members / vendors)</div>
-  <div class="hint">Add a row for each traveller. The <b>travel desk books the preferred train/flight</b> — no ticket details needed here. After you submit, each traveller gets their own link to upload their Aadhaar / passport.</div>
+  <div class="hint">Add a row for each traveller. Enter their train/flight/bus name &amp; number so the <b>travel desk</b> can book and track it — no ticket details needed here. After you submit, each traveller gets their own link to upload their Aadhaar / passport.</div>
   <div class="defaults">
    <div class="field"><label>Default mode</label><select id="defMode"><option value="">—</option>${MODES.map(m=>`<option>${esc(m)}</option>`).join('')}</select></div>
    <div class="field"><label>Default origin</label><input type="text" id="defFrom" placeholder="e.g. Hyderabad"></div>
@@ -356,12 +351,12 @@ function pocForm(){
 
 function pocTableHTML(){
  const opts=(arr,sel,blank)=>(blank!==undefined?`<option value="">${blank}</option>`:'')+arr.map(o=>`<option ${sel===o?'selected':''}>${esc(o)}</option>`).join('');
- return `<div class="tbl-wrap"><table class="poc"><thead><tr>
-  <th>#</th><th>Name</th><th>For</th><th>Age</th><th>Gender</th><th>Phone</th><th>Email</th><th>Mode</th><th>From</th><th>Preferred train / flight</th><th>Arrival</th><th>Station/airport → SSB</th><th>Check-in</th><th>Check-out</th><th></th>
+ return `<div class="tbl-wrap"><table class="poc" style="min-width:1500px"><thead><tr>
+  <th>#</th><th>Name</th><th>For</th><th>Age</th><th>Gender</th><th>Phone</th><th>Email</th><th>Mode</th><th>From</th><th>To</th><th>Train/flight/bus name</th><th>Number</th><th>Arrival</th><th>→ SSB</th><th>Check-in</th><th>Check-out</th><th></th>
   </tr></thead><tbody>
   ${S.pocRows.map((r,i)=>{
-   const tf=r.mode==='Train'||r.mode==='Flight';
-   const prefList=r.mode==='Train'?S.trains.map(x=>x.train):r.mode==='Flight'?S.flights.map(x=>x.flight):[];
+   const isTrain=r.mode==='Train',isFlight=r.mode==='Flight',isBus=r.mode==='Bus (general, not organised)';
+   const lm=needsLastMile(r.mode);
    return `<tr>
     <td class="idx">${i+1}</td>
     <td><input type="text" placeholder="Full name" value="${esc(r.name)}" oninput="pocSet(${i},'name',this.value)"></td>
@@ -372,9 +367,11 @@ function pocTableHTML(){
     <td><input type="email" placeholder="email" value="${esc(r.email)}" oninput="pocSet(${i},'email',this.value)"></td>
     <td><select onchange="pocSetMode(${i},this.value)">${opts(MODES,r.mode,'—')}</select></td>
     <td><input type="text" placeholder="origin" value="${esc(r.from)}" oninput="pocSet(${i},'from',this.value)"></td>
-    <td><select ${tf?'':'disabled'} onchange="pocSet(${i},'pref',this.value)">${tf?opts(prefList.concat(['No preference — desk to decide']),r.pref,'—'):'<option>—</option>'}</select></td>
+    <td>${isFlight?`<input type="text" class="locked" value="${AIRPORT}" disabled>`:`<input type="text" placeholder="${isTrain?'destination station':isBus?'arrival city / bus stand':'—'}" value="${esc(r.to)}" ${r.mode?'':'disabled'} oninput="pocSet(${i},'to',this.value)">`}</td>
+    <td><input type="text" placeholder="${isTrain?'Train name':isFlight?'Flight name':isBus?'Bus name':'—'}" value="${esc(r.detailName)}" ${r.mode?'':'disabled'} oninput="pocSet(${i},'detailName',this.value)"></td>
+    <td><input type="text" placeholder="${isTrain?'Train no.':isFlight?'Flight no.':'—'}" value="${esc(r.detailNumber)}" ${(isTrain||isFlight)?'':'disabled'} oninput="pocSet(${i},'detailNumber',this.value)"></td>
     <td><input type="text" placeholder="27 Sep · 06:30" value="${esc(r.arrival)}" oninput="pocSet(${i},'arrival',this.value)"></td>
-    <td><select ${tf?'':'disabled'} onchange="pocSet(${i},'lastmile',this.value)">${tf?opts(LASTMILE,r.lastmile,'—'):'<option>—</option>'}</select></td>
+    <td><select ${lm?'':'disabled'} onchange="pocSet(${i},'lastmile',this.value)">${lm?opts(LASTMILE,r.lastmile,'—'):'<option>—</option>'}</select></td>
     <td><input type="date" value="${r.checkIn}" onchange="pocSet(${i},'checkIn',this.value)"></td>
     <td><input type="date" value="${r.checkOut}" onchange="pocSet(${i},'checkOut',this.value)"></td>
     <td><button class="rowdel" title="Remove" onclick="pocDel(${i})">✕</button></td></tr>`;
@@ -384,10 +381,10 @@ function pocTableHTML(){
 
 function capturePoc(){['pocName','pocTeam','pocPhone','pocEmail'].forEach(k=>{if(el(k))S.form[k]=el(k).value;});}
 window.pocSet=(i,k,v)=>{S.pocRows[i][k]=v;};
-window.pocSetMode=(i,v)=>{S.pocRows[i].mode=v;S.pocRows[i].pref='';S.pocRows[i].lastmile='';el('pocTableWrap').innerHTML=pocTableHTML();};
+window.pocSetMode=(i,v)=>{S.pocRows[i].mode=v;S.pocRows[i].to='';S.pocRows[i].detailName='';S.pocRows[i].detailNumber='';S.pocRows[i].lastmile='';el('pocTableWrap').innerHTML=pocTableHTML();};
 window.pocDel=i=>{S.pocRows.splice(i,1);if(!S.pocRows.length)S.pocRows=[blankRow()];el('pocTableWrap').innerHTML=pocTableHTML();};
 window.pocAdd=()=>{const r=blankRow();if(val('defMode'))r.mode=val('defMode');if(val('defFrom'))r.from=val('defFrom');if(val('defIn'))r.checkIn=val('defIn');if(val('defOut'))r.checkOut=val('defOut');S.pocRows.push(r);el('pocTableWrap').innerHTML=pocTableHTML();};
-window.pocApplyDefaults=()=>{const m=val('defMode'),fr=val('defFrom'),ci=val('defIn'),co=val('defOut');S.pocRows.forEach(r=>{if(m){r.mode=m;r.pref='';r.lastmile='';}if(fr)r.from=fr;if(ci)r.checkIn=ci;if(co)r.checkOut=co;});el('pocTableWrap').innerHTML=pocTableHTML();};
+window.pocApplyDefaults=()=>{const m=val('defMode'),fr=val('defFrom'),ci=val('defIn'),co=val('defOut');S.pocRows.forEach(r=>{if(m){r.mode=m;r.to='';r.detailName='';r.detailNumber='';r.lastmile='';}if(fr)r.from=fr;if(ci)r.checkIn=ci;if(co)r.checkOut=co;});el('pocTableWrap').innerHTML=pocTableHTML();};
 
 async function submitPoc(){
  capturePoc();
@@ -396,9 +393,13 @@ async function submitPoc(){
  const rows=S.pocRows.filter(r=>r.name.trim()&&r.mode);
  if(!rows.length)return flash(false,'Please add at least one traveller with a name and travel mode.');
  const badLM=rows.find(r=>needsLastMile(r.mode)&&!r.lastmile);
- if(badLM)return flash(false,`For train/flight travellers, please choose how they reach SSB. Check: ${badLM.name}`);
- const badFrom=rows.find(r=>r.mode!=='Organized bus (IYC → SSB)'&&!r.from.trim());
+ if(badLM)return flash(false,`Please choose how they reach SSB. Check: ${badLM.name}`);
+ const badFrom=rows.find(r=>!r.from.trim());
  if(badFrom)return flash(false,`Please enter an origin for: ${badFrom.name}`);
+ const badTo=rows.find(r=>r.mode==='Bus (general, not organised)'&&!r.to.trim());
+ if(badTo)return flash(false,`Please enter an arrival point for: ${badTo.name}`);
+ const badDetail=rows.find(r=>(r.mode==='Train'||r.mode==='Flight')?(!r.detailName.trim()||!r.detailNumber.trim()):r.mode==='Bus (general, not organised)'?!r.detailName.trim():false);
+ if(badDetail)return flash(false,`Please enter the ${badDetail.mode==='Train'?'train':badDetail.mode==='Flight'?'flight':'bus'} name & number for: ${badDetail.name}`);
  S.busy=true;render();
  try{
   const batch='B-'+Date.now().toString(36).toUpperCase();
@@ -408,9 +409,12 @@ async function submitPoc(){
    age:r.age?parseInt(r.age,10):null,gender:r.gender||null,
    phone:r.phone||null,email:r.email||null,
    check_in:r.checkIn,check_out:r.checkOut,travel_mode:r.mode,
-   from_location:r.mode==='Organized bus (IYC → SSB)'?IYC:r.from.trim(),
-   to_location:r.mode==='Train'?'(station)':r.mode==='Flight'?AIRPORT:SSB,
-   preferred_option:r.pref||null,arrival:r.arrival||null,
+   from_location:r.from.trim(),
+   to_location:r.mode==='Train'?(r.to.trim()||'(station)'):r.mode==='Flight'?AIRPORT:r.to.trim(),
+   train_name:r.mode==='Train'?r.detailName.trim():null,train_number:r.mode==='Train'?r.detailNumber.trim():null,
+   flight_name:r.mode==='Flight'?r.detailName.trim():null,flight_number:r.mode==='Flight'?r.detailNumber.trim():null,
+   bus_name:r.mode==='Bus (general, not organised)'?r.detailName.trim():null,
+   arrival:r.arrival||null,
    last_mile:needsLastMile(r.mode)?r.lastmile:null,
    id_status:'Awaiting traveller'}));
   const ins=await sb.from('mkn_requests').insert(payload).select('request_id,name,id_token');
@@ -456,7 +460,7 @@ function reqCard(r,opts={}){
   <div class="req-detail">
    ${line('Stay',`${fmt(r.check_in)} → ${fmt(r.check_out)}`)}
    ${line('Travel',`${r.travel_mode||'—'} · ${r.from_location||'—'} → ${r.to_location||'—'}`)}
-   ${line('Preferred',r.preferred_option)}
+   ${line(r.travel_mode==='Train'?'Train':r.travel_mode==='Flight'?'Flight':'Bus',travelDetailText(r))}
    ${line('Arrival',r.arrival)}
    ${line('To SSB',r.last_mile)}
    ${line('Contact',[r.phone,r.email].filter(Boolean).join(' · '))}
@@ -644,7 +648,7 @@ async function renderIdPage(token){
    <h2>Hello ${esc(t.name)} 🙏</h2>
    <p style="color:var(--clay);font-size:13.5px;margin:6px 0 14px">${esc(t.poc_name||'A coordinator')} has requested your travel to the SSB consecration. Please upload your ID to complete the booking.</p>
    ${P.err2?`<div class="err">${esc(P.err2)}</div>`:''}
-   <div class="hint"><b>Your trip:</b> ${esc(t.travel_mode||'—')} · ${esc(t.from_location||'—')} → ${esc(to||'SSB')}${t.arrival?` · ${esc(t.arrival)}`:''}${t.preferred_option?` · pref: ${esc(t.preferred_option)}`:''}<br><b>Stay:</b> ${fmt(t.check_in)} → ${fmt(t.check_out)}${t.last_mile?`<br><b>To SSB:</b> ${esc(t.last_mile)}`:''}</div>
+   <div class="hint"><b>Your trip:</b> ${esc(t.travel_mode||'—')} · ${esc(t.from_location||'—')} → ${esc(to||'SSB')}${t.arrival?` · ${esc(t.arrival)}`:''}${travelDetailText(t)?` · ${esc(travelDetailText(t))}`:''}<br><b>Stay:</b> ${fmt(t.check_in)} → ${fmt(t.check_out)}${t.last_mile?`<br><b>To SSB:</b> ${esc(t.last_mile)}`:''}</div>
    <div class="grp-title">Your ID</div>
    <div class="field"><label>ID type *</label><div class="chips">
     <button class="chip ${P.idType==='Aadhaar'?'on':''}" onclick="pIdType('Aadhaar')">Aadhaar</button>
