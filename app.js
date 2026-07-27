@@ -1152,10 +1152,12 @@ function masterView() {
       </div>
     </div>` : ''}
     <div class="card pad">
+      <div style="overflow-x:auto">
       <table class="master">
         <thead><tr><th>Location</th><th>Total</th><th>Allotted</th><th style="width:190px">Occupancy</th>${canEdit ? '<th></th>' : ''}</tr></thead>
         <tbody>${rows || `<tr><td colspan="${canEdit ? 5 : 4}" class="empty">No beds added yet.</td></tr>`}</tbody>
       </table>
+      </div>
     </div>
   </div>`;
 }

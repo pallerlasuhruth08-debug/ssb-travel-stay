@@ -112,7 +112,8 @@
   .req-head{display:flex;align-items:center;gap:14px;padding:16px 18px;cursor:pointer}
   .req-head:hover{background:var(--band)}
   .req-avatar{width:40px;height:40px;border-radius:10px;background:var(--band);color:var(--saffron-deep);display:grid;place-items:center;font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:600;flex-shrink:0}
-  .req-title{font-weight:600;font-size:15px}.req-sub{font-size:12.5px;color:var(--muted);margin-top:1px}
+  .req-head>div:nth-child(2){flex:1;min-width:0}
+  .req-title{font-weight:600;font-size:15px;overflow-wrap:break-word}.req-sub{font-size:12.5px;color:var(--muted);margin-top:1px}
   .req-right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
   .caret{color:var(--muted);transition:.2s;font-size:13px}
   .req.open .caret{transform:rotate(90deg)}
@@ -167,6 +168,30 @@
   .auth-tabs button{flex:1;border:1px solid var(--border);background:#fff;border-radius:9px;padding:10px;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--muted);cursor:pointer}
   .auth-tabs button.on{border-color:var(--saffron);background:var(--band);color:var(--saffron-deep)}
   .loading{text-align:center;padding:70px 20px;color:var(--muted);font-size:14px}
+
+  /* mobile */
+  @media(max-width:640px){
+    /* iOS Safari zooms in on focus for any input under 16px — this is the fix, not a size choice */
+    input,select,textarea{font-size:16px}
+    header{padding:16px}
+    header h1{font-size:24px}
+    .om{width:36px;height:36px;font-size:19px}
+    .head-user{gap:10px}
+    main{padding:22px 14px 80px}
+    .view-head h2{font-size:23px}
+    .card.pad,.pad{padding:16px}
+    /* the freed-up width from the tighter padding above is just enough for two .field's to wrap onto
+       one row, which then looks broken because align-items:flex-end staggers them by label height —
+       force a single column instead of leaving it to flex-wrap's judgment */
+    .alloc-row{flex-direction:column;align-items:stretch}
+    .alloc-row .field{width:100%}
+  }
+  @media(max-width:480px){
+    /* once the title block and the status/mode chips can't share a line, drop the chips to their own row
+       instead of letting the card clip them (overflow:hidden on .req swallows anything past the edge) */
+    .req-head{flex-wrap:wrap;row-gap:8px}
+    .req-right{margin-left:0;width:100%;justify-content:flex-start}
+  }
 </style>
 </head>
 <body>
