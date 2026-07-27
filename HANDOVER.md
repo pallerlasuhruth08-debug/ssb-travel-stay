@@ -33,7 +33,7 @@ is not asked for a PNR.
 ## Roles
 
 Anyone can create an account from the sign-in screen and lands as **Requester**. An **Admin** promotes people from
-the *People & Roles* tab. The account `pallerlasuhruth08@gmail.com` is made Admin automatically the first time it
+the *People & Roles* tab. The account `psuhruth08@gmail.com` is made Admin automatically the first time it
 signs up; everyone else is promoted manually.
 
 | Role | Tabs they see |
