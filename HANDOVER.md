@@ -45,8 +45,15 @@ signs up; everyone else is promoted manually.
 | Accommodation Desk | Submit, Accommodation, Bed Master (editable) |
 | Admin | all six, including People & Roles |
 
-Everyone keeps the Submit tab — staff travel too — and the panel at the top of it tracks the requests you raised
-yourself, whatever your role.
+Everyone keeps the Submit tab — staff travel too — and the panel at the top of it now shows the *full* card for
+each request you raised (stepper, traveller table, PNR/bed once assigned), not just a status chip, so you can see
+exactly where it stands.
+
+The coordinator's queue has a **To review / Approved** toggle. Approved requests stay reachable there — "Edit
+details" lets the coordinator correct contact or traveller details (name, age, gender, category, travel mode and
+its detail fields, ID number) any time before the travel desk books a ticket, and "Disapprove" sends an approved
+request back to the requester with a reason, exactly like "Send back" does from the review queue (same
+`mkn_tr_decide` call — it already allowed this transition, it just had no button pointed at it).
 
 ## Data model
 
@@ -68,11 +75,22 @@ in the current app reads them; drop them once you are satisfied with the rebuild
 
 ## Security model
 
-Row-level security is on for all three tables. A requester only ever sees rows they created. The two desks see a
-request only once the coordinator has approved it — never while it is still awaiting review or after it has been
-sent back. Every write goes through a `SECURITY DEFINER` function (`mkn_tr_submit`, `mkn_tr_decide`,
-`mkn_tr_book`, `mkn_tr_set_bed`, `mkn_tr_complete`, `mkn_tr_add_beds`) that re-checks the caller's role
-server-side, so a tampered browser cannot bypass it. There are no insert/update/delete policies at all.
+Row-level security is on for all three tables. A requester only ever sees rows they created. The coordinator and
+admin can see every request regardless of status; the two desks see a request only once the coordinator has
+approved it — never while it is still awaiting review or after it has been sent back. Every write goes through a
+`SECURITY DEFINER` function (`mkn_tr_submit`, `mkn_tr_decide`, `mkn_tr_edit`, `mkn_tr_book`, `mkn_tr_set_bed`,
+`mkn_tr_complete`, `mkn_tr_add_beds`, `mkn_tr_remove_beds`, `mkn_tr_rename_location`) that re-checks the caller's
+role server-side, so a tampered browser cannot bypass it. There are no insert/update/delete policies at all.
+
+`mkn_tr_edit` (coordinator/admin) lets a request and its travellers be corrected while status is `submitted` or
+`approved` — once the travel desk has booked a ticket against it, the function refuses further edits from this
+path, so the booked PNR/mode combination can't be silently invalidated. Leaving the ID-number field blank on edit
+keeps the traveller's existing raw value (the UI has no way to read it back to prefill, by design).
+
+`mkn_tr_remove_beds` (accommodation desk/admin) never evicts an occupant: a bed already held by a traveller is
+left in place and simply not counted in the removed total, rather than silently freeing someone's allotment.
+`mkn_tr_rename_location` moves every bed at a location to a new name in one call and refuses to collide with an
+existing location name.
 
 The raw ID number is **write-only**. `mkn_trip_travellers.id_number` is set by `mkn_tr_submit` and can never be
 read back through the API: the table-level SELECT grant is revoked and re-granted column by column, omitting that
