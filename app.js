@@ -5,7 +5,14 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const CATEGORIES = ['Poornanga', 'Brahmachari', 'POC', 'Core Volunteer', 'Ishanga'];
 const GENDERS = ['Male', 'Female', 'Other'];
-const TRAVEL_MODES = ['Train', 'Flight', 'Bus', 'Own arrangement'];
+const TRAVEL_MODES = ['Train', 'Flight', 'Bus', 'Own arrangement', 'Ashram bus', 'Ashram vehicle'];
+const TRAVEL_MODE_LABEL = {
+  Train: 'Train', Flight: 'Flight', Bus: 'Bus',
+  'Own arrangement': 'Own Arrangement (will not claim for charges)',
+  'Ashram bus': 'Bus arranged by Ashram (IYC to SSB)',
+  'Ashram vehicle': 'Dedicated Team vehicle arranged by Ashram (IYC to SSB)',
+};
+const NO_TICKET_MODES = ['Own arrangement', 'Ashram bus', 'Ashram vehicle'];
 const DEFAULT_ORIGIN = 'Isha Yoga Center, Coimbatore';
 
 const CAB_FROM = ['Madivala', 'Majestic', 'Silk Board',
@@ -52,7 +59,7 @@ const S = {
   requests: [], beds: [], people: [], cabRequests: [],
   mode: 'individual', ticketPref: 'collective', reqCategory: 'intercity',
   solo: blankTrav(), travForm: [], pocTravels: false,
-  form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin',
+  form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin', signupRole: 'requester',
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
   coordType: 'intercity', travelType: 'intercity',
 };
@@ -66,7 +73,7 @@ const isStaff = () => ['coordinator', 'travel_desk', 'accommodation_desk', 'admi
 const allowedTabs = () => TABS.filter(t => t.roles === '*' || t.roles.includes(role()));
 const initials = n => String(n || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
 const travellers = r => (r.travellers || []).slice().sort((a, b) => a.sort_order - b.sort_order);
-const needsTicket = p => p.travel_mode !== 'Own arrangement';
+const needsTicket = p => !NO_TICKET_MODES.includes(p.travel_mode);
 
 function blankTrav(extra) {
   return { name: '', age: '', gender: '', category: 'Core Volunteer', idNumber: '',
@@ -207,15 +214,26 @@ function authView() {
         <button class="${S.authMode === 'signin' ? 'on' : ''}" onclick="setAuthMode('signin')">Sign in</button>
         <button class="${S.authMode === 'signup' ? 'on' : ''}" onclick="setAuthMode('signup')">Create account</button>
       </div>
-      ${S.authMode === 'signup' ? `<div class="field"><label>Full name</label><input id="auName" placeholder="Your name"></div>` : ''}
+      ${S.authMode === 'signup' ? `<div class="field"><label>Full name</label><input id="auName" placeholder="Your name"></div>
+      <div class="field">
+        <label>Are you booking for yourself, or as a team POC?</label>
+        <div class="seg">
+          <button class="${S.signupRole !== 'poc' ? 'on' : ''}" onclick="setSignupRole('requester')">Just myself</button>
+          <button class="${S.signupRole === 'poc' ? 'on' : ''}" onclick="setSignupRole('poc')">I'm a Team POC</button>
+        </div>
+        <div class="hint">POCs can raise a request on behalf of a whole team, not just themselves.</div>
+      </div>` : ''}
       <div class="field"><label>Email</label><input id="auEmail" type="email" placeholder="name@example.com"></div>
       <div class="field"><label>Password</label><input id="auPw" type="password" placeholder="At least 6 characters"></div>
       <button class="btn btn-primary" id="auGo" style="width:100%">${S.authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
-      <div class="hint" style="margin-top:12px">New accounts start as <b>Requester</b> — you can raise a request for yourself or, once an admin makes you a Team POC, for your team. Coordinator, travel desk and accommodation roles are assigned by an admin.</div>
+      <div class="hint" style="margin-top:12px">${S.authMode === 'signup'
+        ? 'Coordinator, travel desk and accommodation roles are assigned separately by an admin.'
+        : 'New accounts start as Requester (or Team POC, if chosen at sign-up). Coordinator, travel desk and accommodation roles are assigned by an admin.'}</div>
     </div>
   </div>`;
 }
 window.setAuthMode = m => { S.authMode = m; render(); };
+window.setSignupRole = r => { S.signupRole = r; render(); };
 
 function wireAuth() {
   const btn = el('auGo');
@@ -225,7 +243,7 @@ function wireAuth() {
     if (!email || !pw) return toast('Enter your email and password.');
     btn.disabled = true; btn.textContent = 'Please wait…';
     const r = S.authMode === 'signup'
-      ? await sb.auth.signUp({ email, password: pw, options: { data: { full_name: val('auName') || email.split('@')[0] } } })
+      ? await sb.auth.signUp({ email, password: pw, options: { data: { full_name: val('auName') || email.split('@')[0], signup_role: S.signupRole } } })
       : await sb.auth.signInWithPassword({ email, password: pw });
     if (r.error) { btn.disabled = false; btn.textContent = S.authMode === 'signup' ? 'Create account' : 'Sign in'; return toast(r.error.message); }
     S.session = r.data.session;
@@ -398,7 +416,7 @@ function travCardHTML(i, t, solo) {
       <div class="field"><label>ID card number</label>
         <input ${f('idNumber')} value="${esc(t.idNumber)}" placeholder="e.g. Aadhaar / passport no."></div>
       <div class="field"><label>Travel preference</label><select data-f="travel" data-i="${i}" data-rerender="1">
-        ${TRAVEL_MODES.map(m => `<option ${t.travel === m ? 'selected' : ''}>${m}</option>`).join('')}
+        ${TRAVEL_MODES.map(m => `<option value="${m}" ${t.travel === m ? 'selected' : ''}>${TRAVEL_MODE_LABEL[m]}</option>`).join('')}
       </select></div>
     </div>
     ${travelFieldsHTML(i, t)}
@@ -422,7 +440,12 @@ function travelFieldsHTML(i, t) {
     <div class="field"><label>Flight number</label><input ${f('flightNumber')} value="${esc(t.flightNumber)}" placeholder="e.g. 6E 204"></div></div>`;
   if (t.travel === 'Bus') return `<div class="field"><label>Bus name / operator</label>
     <input ${f('busName')} value="${esc(t.busName)}" placeholder="e.g. KSRTC Airavat"></div>`;
-  return `<div class="hint" style="margin:-4px 0 12px">Travelling by their own arrangement — no ticket will be booked by the travel desk.</div>`;
+  const NO_TICKET_HINT = {
+    'Own arrangement': 'Travelling by their own arrangement — no ticket will be booked by the travel desk, and no travel charges will be claimed.',
+    'Ashram bus': 'Travelling on the bus arranged by the Ashram (IYC → SSB) — no individual ticket needed.',
+    'Ashram vehicle': 'Travelling in the dedicated team vehicle arranged by the Ashram (IYC → SSB) — no individual ticket needed.',
+  };
+  return `<div class="hint" style="margin:-4px 0 12px">${NO_TICKET_HINT[t.travel] || ''}</div>`;
 }
 
 window.setReqCategory = c => { captureForm(); captureCabForm(); S.reqCategory = c; render(); };
@@ -872,7 +895,7 @@ function editForm(r) {
           ${CATEGORIES.map(c => `<option ${p.category === c ? 'selected' : ''}>${c}</option>`).join('')}
         </select></div>
         <div class="field"><label>Travel mode</label><select id="edt-mode-${p.id}">
-          ${TRAVEL_MODES.map(m => `<option ${p.travel_mode === m ? 'selected' : ''}>${m}</option>`).join('')}
+          ${TRAVEL_MODES.map(m => `<option value="${m}" ${p.travel_mode === m ? 'selected' : ''}>${TRAVEL_MODE_LABEL[m]}</option>`).join('')}
         </select></div>
       </div>
       <div class="grid2">

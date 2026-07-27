@@ -55,9 +55,13 @@ the same "Update booking" action pattern as tickets.
 
 ## Roles
 
-Anyone can create an account from the sign-in screen and lands as **Requester**. An **Admin** promotes people from
-the *People & Roles* tab. The account `psuhruth08@gmail.com` is made Admin automatically the first time it
-signs up; everyone else is promoted manually.
+Anyone can create an account from the sign-in screen. At sign-up they pick "Just myself" or "I'm a Team POC" and
+land directly as **Requester** or **Team POC** accordingly (the `mkn_handle_new_user` trigger reads the choice off
+the sign-up metadata) — no admin step needed for that one distinction. Every other role (Coordinator, Travel Desk,
+Accommodation Desk, Admin) is still assigned manually from the *People & Roles* tab. The account
+`psuhruth08@gmail.com` is made Admin automatically the first time it signs up, overriding whatever it picked. The
+trigger only ever assigns `poc` or `requester` off that metadata field — a tampered sign-up request can't claim
+`admin` or any staff role that way.
 
 | Role | Tabs they see |
 |---|---|
@@ -96,8 +100,11 @@ pickup list), `to_location` (always SSB), `vehicle_type` (checked against the fi
 booking — `driver_name`, `driver_phone`, `vehicle_number`. IDs are sequential too (`CAB-1001`, …), off their own
 sequence (`mkn_cab_seq`) so they never collide with `REQ-` IDs.
 
-Travel mode is one of **Train**, **Flight**, **Bus** or **Own arrangement**, and each carries its own detail fields:
-train name + number, flight name + number, or bus name. Only the set matching the chosen mode is stored.
+Travel mode is one of **Train**, **Flight**, **Bus**, **Own arrangement** (shown as "will not claim for charges"),
+**Ashram bus** ("Bus arranged by Ashram, IYC to SSB") or **Ashram vehicle** ("Dedicated Team vehicle arranged by
+Ashram, IYC to SSB"). Train/Flight/Bus each carry their own detail fields (name + number, or bus name); the other
+three need no ticket at all — the travel desk's ticketing queue skips them (`needsTicket()`), since the Ashram or
+the traveller is arranging that leg directly, not the travel desk.
 
 Categories are Poornanga, Brahmachari, POC, Core Volunteer and Ishanga.
 
