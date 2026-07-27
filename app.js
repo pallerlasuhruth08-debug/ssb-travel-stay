@@ -42,7 +42,7 @@ const S = {
   mode: 'individual', ticketPref: 'collective',
   solo: blankTrav(), travForm: [], pocTravels: false,
   form: {}, open: new Set(), busy: false, authMode: 'signin',
-  deskFilter: 'pending',
+  deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
 };
 
 /* ---------------- helpers ---------------- */
@@ -235,9 +235,9 @@ function submitView() {
     ${mine.length ? `<div class="card pad" style="margin-bottom:18px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
         <div><h3 style="font-size:20px">Requests you've raised</h3>
-          <div class="hint">Track each one as it moves through review, ticketing and bed allotment.</div></div>
+          <div class="hint">Open one to see exactly where it stands — review, ticketing, or bed allotment.</div></div>
       </div>
-      ${mine.map(r => myRequestRow(r)).join('')}
+      ${mine.map(r => reqCard(r)).join('')}
     </div>` : ''}
 
     <div class="card pad">
@@ -296,16 +296,6 @@ function submitView() {
         <button class="btn btn-ghost" onclick="resetForm()">Clear form</button>
       </div>
     </div>
-  </div>`;
-}
-
-function myRequestRow(r) {
-  const [cls, label] = STATUS_CHIP[r.status];
-  const who = r.mode === 'poc' ? (r.team || '(unnamed team)') : (travellers(r)[0]?.name || r.contact_name);
-  return `<div class="assigned" style="background:var(--band);border-color:var(--border);color:var(--ink)">
-    <strong style="font-weight:600">${esc(who)}</strong>
-    <span class="hint" style="display:inline;margin:0">· ${esc(r.id)} · ${travellers(r).length} pax</span>
-    <span style="margin-left:auto"><span class="chip ${cls}"><span class="chip-dot"></span>${label}</span></span>
   </div>`;
 }
 
@@ -586,12 +576,15 @@ function listOrEmpty(items, innerFn, emptyMsg) {
 function coordView() {
   const all = S.requests;
   const pending = all.filter(r => r.status === 'submitted');
+  const approved = all.filter(r => r.status === 'approved');
   const pax = all.reduce((n, r) => n + travellers(r).length, 0);
   const free = S.beds.filter(b => !b.traveller_id).length;
+  const onApproved = S.coordFilter === 'approved';
 
   return `<div class="view active">
     <div class="view-head"><h2>Coordinator — review &amp; approve</h2>
-      <p>Fresh requests land here. Approve to pass the request to the travel desk, or send it back.</p></div>
+      <p>Fresh requests land here. Approve to pass the request to the travel desk, or send it back. Once approved, a
+      request can still be edited or disapproved here until the travel desk books it.</p></div>
     <div class="stats">
       <div class="stat"><div class="n">${all.length}</div><div class="l">Requests</div></div>
       <div class="stat"><div class="n">${pax}</div><div class="l">Travellers</div></div>
@@ -599,10 +592,31 @@ function coordView() {
       <div class="stat"><div class="n">${all.filter(r => r.status === 'complete').length}</div><div class="l">Confirmed</div></div>
       <div class="stat"><div class="n">${free}</div><div class="l">Beds free</div></div>
     </div>
-    ${listOrEmpty(pending, r => `<div class="actions">
-      <button class="btn btn-primary btn-sm" onclick="decide('${r.id}','approved')">Approve → send to travel desk</button>
-      <button class="btn btn-ghost btn-sm" onclick="decide('${r.id}','rejected')">Send back</button>
-    </div>`, 'No requests waiting for review.')}
+    <div class="seg" style="margin-bottom:18px">
+      <button class="${!onApproved ? 'on' : ''}" onclick="setCoordFilter('review')">To review</button>
+      <button class="${onApproved ? 'on' : ''}" onclick="setCoordFilter('approved')">Approved</button>
+    </div>
+    ${onApproved
+      ? listOrEmpty(approved, r => coordInner(r, 'approved'), 'No approved requests yet.')
+      : listOrEmpty(pending, r => coordInner(r, 'review'), 'No requests waiting for review.')}
+  </div>`;
+}
+window.setCoordFilter = f => { S.coordFilter = f; render(); };
+
+function coordInner(r, stage) {
+  if (S.editing.has(r.id)) return editForm(r);
+  const editBtn = `<button class="btn btn-ghost btn-sm" onclick="startEdit('${r.id}')">Edit details</button>`;
+  if (stage === 'approved') {
+    return `<div class="actions">
+      ${editBtn}
+      <button class="btn btn-ghost btn-sm" onclick="decide('${r.id}','rejected')">Disapprove</button>
+      <span class="hint">Sends it back to the requester with a reason, as if it had never been approved.</span>
+    </div>`;
+  }
+  return `<div class="actions">
+    <button class="btn btn-primary btn-sm" onclick="decide('${r.id}','approved')">Approve → send to travel desk</button>
+    <button class="btn btn-ghost btn-sm" onclick="decide('${r.id}','rejected')">Send back</button>
+    ${editBtn}
   </div>`;
 }
 
@@ -616,6 +630,96 @@ window.decide = async (id, decision) => {
   if (error) return toast(error.message);
   await refresh(); render();
   toast(decision === 'approved' ? 'Approved — sent to travel desk.' : 'Sent back to the requester.');
+};
+
+/* ---------------- coordinator: edit request & traveller details ---------------- */
+function editForm(r) {
+  const list = travellers(r);
+  return `<div class="workbox">
+    <label>Request details</label>
+    <div class="grid2">
+      <div class="field"><label>${r.mode === 'poc' ? 'POC full name' : 'Full name'}</label>
+        <input id="edh-name-${r.id}" value="${esc(r.contact_name)}"></div>
+      <div class="field"><label>Phone</label><input id="edh-phone-${r.id}" value="${esc(r.contact_phone || '')}"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Email</label><input id="edh-email-${r.id}" type="email" value="${esc(r.contact_email || '')}"></div>
+      <div class="field"><label>Originating from</label><input id="edh-origin-${r.id}" value="${esc(r.origin || '')}"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Travel date</label><input type="date" id="edh-date-${r.id}" value="${esc(r.travel_date || '')}"></div>
+      ${r.mode === 'poc' ? `<div class="field"><label>Team / group name</label><input id="edh-team-${r.id}" value="${esc(r.team || '')}"></div>` : '<div></div>'}
+    </div>
+    <div class="field"><label>Travel plan / notes</label><textarea id="edh-plan-${r.id}">${esc(r.plan || '')}</textarea></div>
+  </div>
+  <div class="workbox">
+    <label>Travellers</label>
+    ${list.map(p => `<div class="trav-card">
+      <div class="thead"><span class="tnum">${esc(p.name)}</span></div>
+      <div class="grid3">
+        <div class="field"><label>Name</label><input id="edt-name-${p.id}" value="${esc(p.name)}"></div>
+        <div class="field"><label>Age</label><input id="edt-age-${p.id}" value="${esc(p.age ?? '')}" inputmode="numeric"></div>
+        <div class="field"><label>Gender</label><select id="edt-gender-${p.id}">
+          <option value="">—</option>
+          ${GENDERS.map(g => `<option ${p.gender === g ? 'selected' : ''}>${g}</option>`).join('')}
+        </select></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Category</label><select id="edt-category-${p.id}">
+          ${CATEGORIES.map(c => `<option ${p.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>Travel mode</label><select id="edt-mode-${p.id}">
+          ${TRAVEL_MODES.map(m => `<option ${p.travel_mode === m ? 'selected' : ''}>${m}</option>`).join('')}
+        </select></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Train name</label><input id="edt-trainName-${p.id}" value="${esc(p.train_name || '')}"></div>
+        <div class="field"><label>Train number</label><input id="edt-trainNumber-${p.id}" value="${esc(p.train_number || '')}"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Flight name</label><input id="edt-flightName-${p.id}" value="${esc(p.flight_name || '')}"></div>
+        <div class="field"><label>Flight number</label><input id="edt-flightNumber-${p.id}" value="${esc(p.flight_number || '')}"></div>
+      </div>
+      <div class="field"><label>Bus name</label><input id="edt-busName-${p.id}" value="${esc(p.bus_name || '')}"></div>
+      <div class="field" style="margin-bottom:0"><label>ID card number <span class="hint" style="display:inline">(leave blank to keep the one on file)</span></label>
+        <input id="edt-idNumber-${p.id}" placeholder="only if it needs correcting"></div>
+    </div>`).join('')}
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary btn-sm" onclick="saveEdit('${r.id}')">Save changes</button>
+    <button class="btn btn-ghost btn-sm" onclick="cancelEdit('${r.id}')">Cancel</button>
+  </div>`;
+}
+
+window.startEdit = id => { S.editing.add(id); S.open.add(id); render(); };
+window.cancelEdit = id => { S.editing.delete(id); render(); };
+
+window.saveEdit = async id => {
+  const r = S.requests.find(x => x.id === id);
+  const list = travellers(r);
+  const p_request = {
+    contact_name: val(`edh-name-${id}`), contact_phone: val(`edh-phone-${id}`),
+    contact_email: val(`edh-email-${id}`), origin: val(`edh-origin-${id}`),
+    travel_date: val(`edh-date-${id}`), plan: val(`edh-plan-${id}`),
+    team: r.mode === 'poc' ? val(`edh-team-${id}`) : r.team,
+  };
+  if (!p_request.contact_name) return toast('Full name is required.');
+  const p_travellers = list.map(p => ({
+    id: p.id, name: val(`edt-name-${p.id}`), age: val(`edt-age-${p.id}`),
+    gender: el(`edt-gender-${p.id}`)?.value || '', category: el(`edt-category-${p.id}`)?.value || '',
+    travel_mode: el(`edt-mode-${p.id}`)?.value || '',
+    train_name: val(`edt-trainName-${p.id}`), train_number: val(`edt-trainNumber-${p.id}`),
+    flight_name: val(`edt-flightName-${p.id}`), flight_number: val(`edt-flightNumber-${p.id}`),
+    bus_name: val(`edt-busName-${p.id}`), id_number: val(`edt-idNumber-${p.id}`),
+  }));
+  const incomplete = p_travellers.find(t => !t.name);
+  if (incomplete) return toast('Every traveller needs a name.');
+
+  const { error } = await sb.rpc('mkn_tr_edit', { p_request_id: id, p_request, p_travellers });
+  if (error) return toast(error.message);
+  S.editing.delete(id);
+  await refresh(); render();
+  toast('Details updated.');
 };
 
 /* ---------------- 3 · travel desk & 4 · accommodation ---------------- */
@@ -760,17 +864,19 @@ function masterView() {
   const canEdit = ['accommodation_desk', 'admin'].includes(role());
   const byLoc = {};
   S.beds.forEach(b => (byLoc[b.location] = byLoc[b.location] || []).push(b));
-  const rows = Object.keys(byLoc).sort().map(loc => {
+  const locs = Object.keys(byLoc).sort();
+  const rows = locs.map(loc => {
     const beds = byLoc[loc], total = beds.length;
     const taken = beds.filter(b => b.traveller_id).length;
     const pct = total ? Math.round(taken / total * 100) : 0;
     return `<tr><td style="font-weight:600">${esc(loc)}</td><td>${total}</td><td>${taken}</td>
-      <td class="occ">${pct}%<div class="bar"><span style="width:${pct}%"></span></div></td></tr>`;
+      <td class="occ">${pct}%<div class="bar"><span style="width:${pct}%"></span></div></td>
+      ${canEdit ? `<td><button class="btn btn-ghost btn-sm" onclick="renameLocation('${esc(loc)}')">Rename</button></td>` : ''}</tr>`;
   }).join('');
 
   return `<div class="view active">
     <div class="view-head"><h2>Bed master</h2>
-      <p>All beds available at SSB. Add a location and bed numbers; occupancy updates as beds are allotted.</p></div>
+      <p>All beds available at SSB. Add or remove beds, and rename a location; occupancy updates as beds are allotted.</p></div>
     ${canEdit ? `<div class="card pad" style="margin-bottom:22px">
       <label>Add beds to a location</label>
       <div class="alloc-row">
@@ -780,31 +886,67 @@ function masterView() {
         <button class="btn btn-primary" onclick="addBeds()">Add beds</button>
       </div>
     </div>` : ''}
+    ${canEdit && locs.length ? `<div class="card pad" style="margin-bottom:22px">
+      <label>Remove beds from a location</label>
+      <div class="alloc-row">
+        <div class="field"><label>Location / block</label><select id="rmLoc">
+          ${locs.map(l => `<option>${esc(l)}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>Bed numbers</label><input id="rmBeds" placeholder="e.g. 101-110  or  1,2,3">
+          <div class="hint">Range (101-110) or comma list (1,2,3). A bed already allotted to someone is left in place.</div></div>
+        <button class="btn btn-ghost" onclick="removeBeds()">Remove beds</button>
+      </div>
+    </div>` : ''}
     <div class="card pad">
       <table class="master">
-        <thead><tr><th>Location</th><th>Total</th><th>Allotted</th><th style="width:190px">Occupancy</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="4" class="empty">No beds added yet.</td></tr>`}</tbody>
+        <thead><tr><th>Location</th><th>Total</th><th>Allotted</th><th style="width:190px">Occupancy</th>${canEdit ? '<th></th>' : ''}</tr></thead>
+        <tbody>${rows || `<tr><td colspan="${canEdit ? 5 : 4}" class="empty">No beds added yet.</td></tr>`}</tbody>
       </table>
     </div>
   </div>`;
 }
 
+function parseBedNumbers(raw) {
+  if (/^\d+\s*-\s*\d+$/.test(raw)) {
+    const [a, b] = raw.split('-').map(x => parseInt(x.trim(), 10));
+    const out = [];
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) out.push(String(i));
+    return out;
+  }
+  return raw.split(',').map(x => x.trim()).filter(Boolean);
+}
+
 window.addBeds = async () => {
   const loc = val('acLoc'), raw = val('acBeds');
   if (!loc || !raw) return toast('Enter a location and bed numbers.');
-  let beds;
-  if (/^\d+\s*-\s*\d+$/.test(raw)) {
-    const [a, b] = raw.split('-').map(x => parseInt(x.trim(), 10));
-    beds = [];
-    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) beds.push(String(i));
-  } else {
-    beds = raw.split(',').map(x => x.trim()).filter(Boolean);
-  }
+  const beds = parseBedNumbers(raw);
   if (!beds.length) return toast('Enter at least one bed number.');
   const { data, error } = await sb.rpc('mkn_tr_add_beds', { p_location: loc, p_beds: beds });
   if (error) return toast(error.message);
   await refresh(); render();
   toast(`Added ${data} bed(s) to ${loc}.` + (data < beds.length ? ' Duplicates were skipped.' : ''));
+};
+
+window.removeBeds = async () => {
+  const loc = val('rmLoc'), raw = val('rmBeds');
+  if (!loc || !raw) return toast('Enter a location and bed numbers.');
+  const beds = parseBedNumbers(raw);
+  if (!beds.length) return toast('Enter at least one bed number.');
+  const { data, error } = await sb.rpc('mkn_tr_remove_beds', { p_location: loc, p_beds: beds });
+  if (error) return toast(error.message);
+  await refresh(); render();
+  toast(`Removed ${data} bed(s) from ${loc}.` + (data < beds.length ? ' Any already allotted were left in place.' : ''));
+};
+
+window.renameLocation = async loc => {
+  const next = prompt(`Rename "${loc}" to:`, loc);
+  if (next === null) return;
+  const trimmed = next.trim();
+  if (!trimmed || trimmed === loc) return;
+  const { error } = await sb.rpc('mkn_tr_rename_location', { p_old: loc, p_new: trimmed });
+  if (error) return toast(error.message);
+  await refresh(); render();
+  toast(`Renamed to "${trimmed}".`);
 };
 
 /* ---------------- people & roles (admin) ---------------- */
