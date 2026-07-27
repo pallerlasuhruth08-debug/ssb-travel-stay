@@ -8,6 +8,17 @@ const GENDERS = ['Male', 'Female', 'Other'];
 const TRAVEL_MODES = ['Train', 'Flight', 'Bus', 'Own arrangement'];
 const DEFAULT_ORIGIN = 'Isha Yoga Center, Coimbatore';
 
+const CAB_FROM = ['Madivala', 'Majestic', 'Silk Board',
+  'Bengaluru Railway Station (Cantonment)', 'Bengaluru Railway Station (KSR)', 'Airport T1', 'Airport T2'];
+const CAB_TO = 'Sadhguru Sannidhi, Bengaluru (SSB)';
+const CAB_VEHICLES = ['Innova', 'Sedan', 'Mini', 'Tempo Traveller', 'Bus'];
+const CAB_STATUS_CHIP = {
+  submitted: ['submitted', 'Awaiting review'],
+  approved:  ['approved',  'Awaiting cab'],
+  booked:    ['complete',  'Booked'],
+  rejected:  ['rejected',  'Sent back'],
+};
+
 const STAGES = ['submitted', 'approved', 'booked', 'complete'];
 const STAGE_LABEL = { submitted: 'Submitted', approved: 'Approved', booked: 'Ticketed', complete: 'Housed' };
 const STATUS_CHIP = {
@@ -25,8 +36,8 @@ const ROLE_LABEL = {
 
 const TABS = [
   { id: 'submit', label: '1 · Submit Request', roles: '*' },
-  { id: 'coord',  label: '2 · Coordinator',    roles: ['coordinator', 'admin'], badge: 'submitted' },
-  { id: 'travel', label: '3 · Travel Desk',    roles: ['travel_desk', 'admin'], badge: 'approved' },
+  { id: 'coord',  label: '2 · Coordinator',    roles: ['coordinator', 'admin'], badge: 'submitted', cabBadge: 'submitted' },
+  { id: 'travel', label: '3 · Travel Desk',    roles: ['travel_desk', 'admin'], badge: 'approved', cabBadge: 'approved' },
   { id: 'accom',  label: '4 · Accommodation',  roles: ['accommodation_desk', 'admin'], badge: 'booked' },
   { id: 'master', label: 'Bed Master',         roles: ['accommodation_desk', 'coordinator', 'admin'] },
   { id: 'people', label: 'People & Roles',     roles: ['admin'] },
@@ -38,11 +49,12 @@ const TRAV_COLS = ['id', 'request_id', 'sort_order', 'name', 'age', 'gender', 'c
 
 const S = {
   session: null, profile: null, view: 'submit',
-  requests: [], beds: [], people: [],
-  mode: 'individual', ticketPref: 'collective',
+  requests: [], beds: [], people: [], cabRequests: [],
+  mode: 'individual', ticketPref: 'collective', reqCategory: 'intercity',
   solo: blankTrav(), travForm: [], pocTravels: false,
-  form: {}, open: new Set(), busy: false, authMode: 'signin',
+  form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin',
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
+  coordType: 'intercity', travelType: 'intercity',
 };
 
 /* ---------------- helpers ---------------- */
@@ -101,15 +113,18 @@ async function loadAll() {
 }
 
 async function refresh() {
-  const [reqs, beds] = await Promise.all([
+  const [reqs, beds, cabs] = await Promise.all([
     sb.from('mkn_trip_requests').select(`*,travellers:mkn_trip_travellers(${TRAV_COLS})`).order('created_at', { ascending: false }),
     ['coordinator', 'accommodation_desk', 'admin'].includes(role())
       ? sb.from('mkn_beds').select('*').order('location').order('bed')
       : Promise.resolve({ data: [] }),
+    sb.from('mkn_cab_requests').select('*').order('created_at', { ascending: false }),
   ]);
   if (reqs.error) toast(reqs.error.message);
+  if (cabs.error) toast(cabs.error.message);
   S.requests = reqs.data || [];
   S.beds = beds.data || [];
+  S.cabRequests = cabs.data || [];
 }
 
 /* ---------------- shell ---------------- */
@@ -117,14 +132,19 @@ function render() {
   if (!S.session) { el('app').innerHTML = authView(); wireAuth(); return; }
   const tabs = allowedTabs();
   const counts = {};
-  tabs.forEach(t => { if (t.badge) counts[t.id] = S.requests.filter(r => r.status === t.badge).length; });
+  tabs.forEach(t => {
+    if (!t.badge) return;
+    let n = S.requests.filter(r => r.status === t.badge).length;
+    if (t.cabBadge) n += S.cabRequests.filter(c => c.status === t.cabBadge).length;
+    counts[t.id] = n;
+  });
 
   el('app').innerHTML = `
   <header>
     <div class="head-inner">
       <div>
         <div class="eyebrow">Mahakshetra Nirmana · Consecration</div>
-        <h1>Travel &amp; Stay Requests</h1>
+        <h1>Transport &amp; Stay Requests</h1>
         <div class="venue">Destination: Sadhguru Sannidhi, Bengaluru (SSB)</div>
       </div>
       <div class="head-user">
@@ -219,17 +239,19 @@ function wireAuth() {
 
 /* ---------------- 1 · submit ---------------- */
 function submitView() {
-  const poc = S.mode === 'poc';
-  const canPoc = ['poc', 'coordinator', 'admin'].includes(role());
-  if (!canPoc && poc) S.mode = 'individual';
-  const f = S.form;
-  const mine = S.requests.filter(r => r.created_by === S.session.user.id);
+  const cab = S.reqCategory === 'cab';
+  const mine = [
+    ...S.requests.filter(r => r.created_by === S.session.user.id).map(r => ({ r, cab: false })),
+    ...S.cabRequests.filter(c => c.created_by === S.session.user.id).map(r => ({ r, cab: true })),
+  ].sort((a, b) => new Date(b.r.created_at) - new Date(a.r.created_at));
 
   return `
   <div class="view active">
     <div class="view-head">
-      <h2>New travel &amp; stay request</h2>
-      <p>Raise a request for yourself, or as a POC on behalf of your team. Each traveller needs age, gender, category and an ID for ticket booking.</p>
+      <h2>New ${cab ? 'intracity cab' : 'intercity transport &amp; stay'} request</h2>
+      <p>${cab
+        ? 'Raise a request for a cab within Bengaluru, to or from SSB. It goes to the coordinator for approval, then to the travel desk to be booked.'
+        : 'Raise a request for yourself, or as a POC on behalf of your team. Each traveller needs age, gender, category and an ID for ticket booking.'}</p>
     </div>
 
     ${mine.length ? `<div class="card pad" style="margin-bottom:18px">
@@ -237,10 +259,29 @@ function submitView() {
         <div><h3 style="font-size:20px">Requests you've raised</h3>
           <div class="hint">Open one to see exactly where it stands — review, ticketing, or bed allotment.</div></div>
       </div>
-      ${mine.map(r => reqCard(r)).join('')}
+      ${mine.map(m => m.cab ? cabCard(m.r) : reqCard(m.r)).join('')}
     </div>` : ''}
 
     <div class="card pad">
+      <div class="field">
+        <label>What kind of request is this?</label>
+        <div class="seg">
+          <button class="${!cab ? 'on' : ''}" onclick="setReqCategory('intercity')">Intercity Transport &amp; Stay</button>
+          <button class="${cab ? 'on' : ''}" onclick="setReqCategory('cab')">Intracity Cab</button>
+        </div>
+      </div>
+      ${cab ? cabFormHTML() : intercityFormHTML()}
+    </div>
+  </div>`;
+}
+
+function intercityFormHTML() {
+  const poc = S.mode === 'poc';
+  const canPoc = ['poc', 'coordinator', 'admin'].includes(role());
+  if (!canPoc && poc) S.mode = 'individual';
+  const f = S.form;
+
+  return `
       <div class="field">
         <label>Who is this request for?</label>
         <div class="seg">
@@ -294,9 +335,47 @@ function submitView() {
       <div class="actions" style="margin-top:20px">
         <button class="btn btn-primary" id="submitBtn" ${S.busy ? 'disabled' : ''}>${S.busy ? 'Submitting…' : 'Submit request'}</button>
         <button class="btn btn-ghost" onclick="resetForm()">Clear form</button>
+      </div>`;
+}
+
+function cabFormHTML() {
+  const cf = S.cabForm;
+  return `
+      <div class="grid2">
+        <div class="field"><label>Date</label><input type="date" id="cabDate" value="${esc(cf.date || '')}"></div>
+        <div class="field"><label>Time</label><input type="time" id="cabTime" value="${esc(cf.time || '')}"></div>
       </div>
-    </div>
-  </div>`;
+      <div class="grid2">
+        <div class="field"><label>From</label><select id="cabFrom">
+          <option value="">— select pickup —</option>
+          ${CAB_FROM.map(f => `<option ${cf.from === f ? 'selected' : ''}>${f}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>To</label><input value="${esc(CAB_TO)}" disabled></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Type of vehicle</label><select id="cabVehicle">
+          <option value="">— select vehicle —</option>
+          ${CAB_VEHICLES.map(v => `<option ${cf.vehicle === v ? 'selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>No. of pax</label><input id="cabPax" value="${esc(cf.pax || '')}" inputmode="numeric" placeholder="e.g. 4"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="field" style="margin-bottom:8px"><label style="margin-bottom:2px">POC details</label>
+        <div class="hint">Whoever the travel desk should reach for pickup coordination.</div></div>
+      <div class="grid2">
+        <div class="field"><label>Name</label>
+          <input id="cabPocName" value="${esc(cf.pocName ?? S.profile?.full_name ?? '')}" placeholder="e.g. Prabahar Subbiah"></div>
+        <div class="field"><label>Phone number</label><input id="cabPocPhone" value="${esc(cf.pocPhone || '')}" placeholder="+91 …"></div>
+      </div>
+      <div class="field"><label>Email ID</label>
+        <input id="cabPocEmail" type="email" value="${esc(cf.pocEmail ?? S.profile?.email ?? '')}" placeholder="name@example.com"></div>
+
+      <div class="actions" style="margin-top:20px">
+        <button class="btn btn-primary" id="cabSubmitBtn" ${S.busy ? 'disabled' : ''}>${S.busy ? 'Submitting…' : 'Submit cab request'}</button>
+        <button class="btn btn-ghost" onclick="resetCabForm()">Clear form</button>
+      </div>`;
 }
 
 function travCardHTML(i, t, solo) {
@@ -347,6 +426,7 @@ function travelFieldsHTML(i, t) {
   return `<div class="hint" style="margin:-4px 0 12px">Travelling by their own arrangement — no ticket will be booked by the travel desk.</div>`;
 }
 
+window.setReqCategory = c => { captureForm(); captureCabForm(); S.reqCategory = c; render(); };
 window.setMode = m => { S.mode = m; if (m === 'poc' && !S.travForm.length) S.travForm = [blankTrav()]; captureForm(); render(); };
 window.setTicketPref = p => { captureForm(); S.ticketPref = p; render(); };
 window.setPocTravels = v => {
@@ -379,6 +459,15 @@ function captureForm() {
   });
 }
 
+function captureCabForm() {
+  if (S.view !== 'submit') return;
+  const f = S.cabForm;
+  [['cabDate', 'date'], ['cabTime', 'time'], ['cabFrom', 'from'], ['cabVehicle', 'vehicle'],
+   ['cabPax', 'pax'], ['cabPocName', 'pocName'], ['cabPocPhone', 'pocPhone'], ['cabPocEmail', 'pocEmail']].forEach(([id, key]) => {
+    if (el(id)) f[key] = el(id).value;
+  });
+}
+
 function wireView() {
   if (S.view !== 'submit') return;
 
@@ -400,6 +489,7 @@ function wireView() {
   });
 
   if (el('submitBtn')) el('submitBtn').onclick = submitRequest;
+  if (el('cabSubmitBtn')) el('cabSubmitBtn').onclick = submitCabRequest;
 }
 
 function setTrav(i, key, v) {
@@ -486,6 +576,35 @@ async function submitRequest() {
   }
 }
 
+async function submitCabRequest() {
+  captureCabForm();
+  const f = S.cabForm;
+  if (!(f.pocName || '').trim()) return toast('Please enter the POC name.');
+  if (!f.from) return toast('Pick a pickup location.');
+  if (!f.vehicle) return toast('Pick a type of vehicle.');
+
+  S.busy = true; render();
+  try {
+    const { data, error } = await sb.rpc('mkn_cab_submit', {
+      p_request: {
+        poc_name: f.pocName.trim(), poc_email: f.pocEmail || '', poc_phone: f.pocPhone || '',
+        travel_date: f.date || '', travel_time: f.time || '',
+        from_location: f.from, vehicle_type: f.vehicle, pax_count: f.pax || '',
+      },
+    });
+    if (error) throw error;
+
+    S.busy = false;
+    S.cabForm = {};
+    await refresh(); render();
+    toast(`Cab request ${data} submitted — now with the coordinator.`);
+  } catch (err) {
+    S.busy = false; render();
+    toast(err.message || String(err));
+  }
+}
+window.resetCabForm = () => { S.cabForm = {}; render(); toast('Form cleared.'); };
+
 /* ---------------- shared request card ---------------- */
 function stepper(status) {
   if (status === 'rejected') return '';
@@ -567,41 +686,101 @@ window.viewFile = async (e, bucket, path) => {
   window.open(data.signedUrl, '_blank');
 };
 
-function listOrEmpty(items, innerFn, emptyMsg) {
+function listOrEmpty(items, innerFn, emptyMsg, cardFn = reqCard) {
   if (!items.length) return `<div class="empty"><div class="big">All clear</div><div>${emptyMsg}</div></div>`;
-  return items.map(r => reqCard(r, innerFn(r))).join('');
+  return items.map(r => cardFn(r, innerFn(r))).join('');
+}
+
+/* ---------------- shared cab request card ---------------- */
+function cabStepper(status) {
+  if (status === 'rejected') return '';
+  const stages = ['submitted', 'approved', 'booked'];
+  const labels = { submitted: 'Submitted', approved: 'Approved', booked: 'Cab booked' };
+  const idx = stages.indexOf(status);
+  return `<div class="stepper">` + stages.map((s, i) => {
+    const cls = i < idx ? 'done' : (i === idx ? 'now' : '');
+    return `<div class="stp ${cls}"><div class="dot">${i < idx ? '✓' : i + 1}</div>
+      <div class="lbl">${labels[s]}</div>${i < stages.length - 1 ? '<div class="line"></div>' : ''}</div>`;
+  }).join('') + `</div>`;
+}
+
+function cabStatusChip(status) {
+  const [cls, label] = CAB_STATUS_CHIP[status];
+  return `<span class="chip ${cls}"><span class="chip-dot"></span>${label}</span>`;
+}
+
+function cabTimeLabel(t) { return t ? String(t).slice(0, 5) : ''; }
+
+function cabCard(r, inner) {
+  return `<div class="req ${S.open.has(r.id) ? 'open' : ''}" id="req-${r.id}">
+    <div class="req-head" onclick="toggleReq('${r.id}')">
+      <div class="req-avatar">🚕</div>
+      <div><div class="req-title">${esc(r.poc_name)}</div>
+        <div class="req-sub">Intracity cab · ${esc(r.from_location)} → SSB · ${esc(r.travel_date || 'no date')}${cabTimeLabel(r.travel_time) ? ' · ' + esc(cabTimeLabel(r.travel_time)) : ''}</div></div>
+      <div class="req-right"><span class="chip mode">${esc(r.vehicle_type)}${r.pax_count ? ' · ' + esc(r.pax_count) + ' pax' : ''}</span>${cabStatusChip(r.status)}<span class="caret">▶</span></div>
+    </div>
+    <div class="req-body">
+      ${cabStepper(r.status)}
+      <div class="detail-grid">
+        <div><div class="k">Request</div><div class="v">${esc(r.id)}</div></div>
+        <div><div class="k">From</div><div class="v">${esc(r.from_location)}</div></div>
+        <div><div class="k">To</div><div class="v">${esc(r.to_location)}</div></div>
+        <div><div class="k">Date &amp; time</div><div class="v">${esc(r.travel_date || '—')}${cabTimeLabel(r.travel_time) ? ' · ' + esc(cabTimeLabel(r.travel_time)) : ''}</div></div>
+        <div><div class="k">Vehicle</div><div class="v">${esc(r.vehicle_type)}</div></div>
+        <div><div class="k">Pax</div><div class="v">${esc(r.pax_count ?? '—')}</div></div>
+        <div><div class="k">POC</div><div class="v">${esc(r.poc_name)}</div></div>
+        <div><div class="k">Phone</div><div class="v">${esc(r.poc_phone || '—')}</div></div>
+        <div><div class="k">Email</div><div class="v">${esc(r.poc_email || '—')}</div></div>
+      </div>
+      ${r.rejection_reason ? `<div class="notice">Sent back: ${esc(r.rejection_reason)}</div>` : ''}
+      ${r.status === 'booked' ? `<div class="assigned">🚗 Driver: ${esc(r.driver_name)} · ${esc(r.driver_phone)}${r.vehicle_number ? ' · ' + esc(r.vehicle_number) : ''}</div>` : ''}
+      ${inner || ''}
+    </div>
+  </div>`;
 }
 
 /* ---------------- 2 · coordinator ---------------- */
 function coordView() {
+  const cab = S.coordType === 'cab';
   const all = S.requests;
   const pending = all.filter(r => r.status === 'submitted');
   const approved = all.filter(r => r.status === 'approved');
   const pax = all.reduce((n, r) => n + travellers(r).length, 0);
   const free = S.beds.filter(b => !b.traveller_id).length;
+  const cabPending = S.cabRequests.filter(c => c.status === 'submitted');
+  const cabApproved = S.cabRequests.filter(c => c.status === 'approved');
   const onApproved = S.coordFilter === 'approved';
 
   return `<div class="view active">
     <div class="view-head"><h2>Coordinator — review &amp; approve</h2>
-      <p>Fresh requests land here. Approve to pass the request to the travel desk, or send it back. Once approved, a
-      request can still be edited or disapproved here until the travel desk books it.</p></div>
+      <p>Fresh requests land here. Approve to pass the request to the travel desk, or send it back. Once approved, an
+      intercity request can still be edited or disapproved here until the travel desk books it.</p></div>
     <div class="stats">
-      <div class="stat"><div class="n">${all.length}</div><div class="l">Requests</div></div>
+      <div class="stat"><div class="n">${all.length}</div><div class="l">Intercity requests</div></div>
       <div class="stat"><div class="n">${pax}</div><div class="l">Travellers</div></div>
-      <div class="stat"><div class="n">${pending.length}</div><div class="l">To review</div></div>
+      <div class="stat"><div class="n">${cab ? cabPending.length : pending.length}</div><div class="l">To review</div></div>
       <div class="stat"><div class="n">${all.filter(r => r.status === 'complete').length}</div><div class="l">Confirmed</div></div>
       <div class="stat"><div class="n">${free}</div><div class="l">Beds free</div></div>
+    </div>
+    <div class="seg" style="margin-bottom:10px">
+      <button class="${!cab ? 'on' : ''}" onclick="setCoordType('intercity')">Intercity requests</button>
+      <button class="${cab ? 'on' : ''}" onclick="setCoordType('cab')">Intracity cabs</button>
     </div>
     <div class="seg" style="margin-bottom:18px">
       <button class="${!onApproved ? 'on' : ''}" onclick="setCoordFilter('review')">To review</button>
       <button class="${onApproved ? 'on' : ''}" onclick="setCoordFilter('approved')">Approved</button>
     </div>
-    ${onApproved
-      ? listOrEmpty(approved, r => coordInner(r, 'approved'), 'No approved requests yet.')
-      : listOrEmpty(pending, r => coordInner(r, 'review'), 'No requests waiting for review.')}
+    ${cab
+      ? (onApproved
+          ? listOrEmpty(cabApproved, r => cabCoordInner(r, 'approved'), 'No approved cab requests yet.', cabCard)
+          : listOrEmpty(cabPending, r => cabCoordInner(r, 'review'), 'No cab requests waiting for review.', cabCard))
+      : (onApproved
+          ? listOrEmpty(approved, r => coordInner(r, 'approved'), 'No approved requests yet.')
+          : listOrEmpty(pending, r => coordInner(r, 'review'), 'No requests waiting for review.'))}
   </div>`;
 }
 window.setCoordFilter = f => { S.coordFilter = f; render(); };
+window.setCoordType = t => { S.coordType = t; render(); };
 
 function coordInner(r, stage) {
   if (S.editing.has(r.id)) return editForm(r);
@@ -627,6 +806,31 @@ window.decide = async (id, decision) => {
     if (reason === null) return;
   }
   const { error } = await sb.rpc('mkn_tr_decide', { p_request_id: id, p_decision: decision, p_reason: reason || null });
+  if (error) return toast(error.message);
+  await refresh(); render();
+  toast(decision === 'approved' ? 'Approved — sent to travel desk.' : 'Sent back to the requester.');
+};
+
+function cabCoordInner(r, stage) {
+  if (stage === 'approved') {
+    return `<div class="actions">
+      <button class="btn btn-ghost btn-sm" onclick="cabDecide('${r.id}','rejected')">Disapprove</button>
+      <span class="hint">Sends it back to the requester with a reason, as if it had never been approved.</span>
+    </div>`;
+  }
+  return `<div class="actions">
+    <button class="btn btn-primary btn-sm" onclick="cabDecide('${r.id}','approved')">Approve → send to travel desk</button>
+    <button class="btn btn-ghost btn-sm" onclick="cabDecide('${r.id}','rejected')">Send back</button>
+  </div>`;
+}
+
+window.cabDecide = async (id, decision) => {
+  let reason = null;
+  if (decision === 'rejected') {
+    reason = prompt('Reason for sending this back (optional):');
+    if (reason === null) return;
+  }
+  const { error } = await sb.rpc('mkn_cab_decide', { p_request_id: id, p_decision: decision, p_reason: reason || null });
   if (error) return toast(error.message);
   await refresh(); render();
   toast(decision === 'approved' ? 'Approved — sent to travel desk.' : 'Sent back to the requester.');
@@ -726,6 +930,26 @@ window.saveEdit = async id => {
 function deskView(which) {
   const isTravel = which === 'travel';
   const done = S.deskFilter === 'done';
+  const cab = isTravel && S.travelType === 'cab';
+
+  if (cab) {
+    const items = S.cabRequests.filter(c => done ? c.status === 'booked' : c.status === 'approved');
+    const emptyMsg = done ? 'No booked cabs yet.' : 'No approved cab requests waiting to be booked.';
+    return `<div class="view active">
+      <div class="view-head"><h2>Travel desk — book cabs</h2>
+        <p>Approved cab requests await booking. Enter the driver's name, phone number and the vehicle number, then confirm to share the details with the POC.</p></div>
+      <div class="seg" style="margin-bottom:10px">
+        <button class="${!cab ? 'on' : ''}" onclick="setTravelType('intercity')">Intercity requests</button>
+        <button class="on" onclick="setTravelType('cab')">Intracity cabs</button>
+      </div>
+      <div class="seg" style="margin-bottom:18px">
+        <button class="${!done ? 'on' : ''}" onclick="setDeskFilter('pending')">Awaiting booking</button>
+        <button class="${done ? 'on' : ''}" onclick="setDeskFilter('done')">Booked</button>
+      </div>
+      ${listOrEmpty(items, cabTravelInner, emptyMsg, cabCard)}
+    </div>`;
+  }
+
   const head = isTravel
     ? { t: 'Travel desk — book tickets', p: 'Approved requests await ticketing. Enter the PNR / ticket reference (or a collective reference), attach the booked ticket, then confirm to notify the requester and pass on for bed allotment.' }
     : { t: 'Accommodation — allot beds', p: 'Ticketed travellers await a bed. Pick a free bed from the master for each person, then confirm to complete and notify.' };
@@ -737,6 +961,10 @@ function deskView(which) {
     : (isTravel ? 'No approved requests waiting for tickets.' : 'No ticketed travellers waiting for beds.');
   return `<div class="view active">
     <div class="view-head"><h2>${head.t}</h2><p>${head.p}</p></div>
+    ${isTravel ? `<div class="seg" style="margin-bottom:10px">
+      <button class="on" onclick="setTravelType('intercity')">Intercity requests</button>
+      <button class="" onclick="setTravelType('cab')">Intracity cabs</button>
+    </div>` : ''}
     <div class="seg" style="margin-bottom:18px">
       <button class="${!done ? 'on' : ''}" onclick="setDeskFilter('pending')">${isTravel ? 'Awaiting ticket' : 'Awaiting bed'}</button>
       <button class="${done ? 'on' : ''}" onclick="setDeskFilter('done')">${isTravel ? 'Booked' : 'Housed'}</button>
@@ -745,6 +973,32 @@ function deskView(which) {
   </div>`;
 }
 window.setDeskFilter = f => { S.deskFilter = f; render(); };
+window.setTravelType = t => { S.travelType = t; render(); };
+
+function cabTravelInner(r) {
+  return `<div class="workbox"><label>Cab booking</label>
+    <div class="grid2">
+      <div class="field"><label>Driver name</label><input id="drvName-${r.id}" value="${esc(r.driver_name || '')}" placeholder="Driver's full name"></div>
+      <div class="field"><label>Driver phone</label><input id="drvPhone-${r.id}" value="${esc(r.driver_phone || '')}" placeholder="+91 …"></div>
+    </div>
+    <div class="field" style="margin-bottom:0"><label>Vehicle number</label>
+      <input id="drvVehicle-${r.id}" value="${esc(r.vehicle_number || '')}" placeholder="e.g. KA-01-AB-1234"></div>
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary btn-sm" onclick="bookCab('${r.id}')">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'} &amp; notify</button>
+    <span class="hint">${r.status === 'approved' ? `Shares the driver's details with ${esc(r.poc_email || 'the POC')}.` : 'Corrects the driver details already on file.'}</span>
+  </div>`;
+}
+
+window.bookCab = async id => {
+  const name = val(`drvName-${id}`), phone = val(`drvPhone-${id}`), vehicle = val(`drvVehicle-${id}`);
+  if (!name) return toast('Enter the driver name.');
+  if (!phone) return toast('Enter the driver phone number.');
+  const { error } = await sb.rpc('mkn_cab_book', { p_request_id: id, p_driver_name: name, p_driver_phone: phone, p_vehicle_number: vehicle || null });
+  if (error) return toast(error.message);
+  await refresh(); render();
+  toast('Cab booked ✓ Driver details shared with the POC.');
+};
 
 function travelInner(r) {
   const list = travellers(r);

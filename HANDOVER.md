@@ -1,9 +1,10 @@
-# MKN Travel & Stay — SSB Bengaluru
+# MKN Transport & Stay — SSB Bengaluru
 
 **Live app:** https://ssb-travel-stay.vercel.app
 
 A static front end on Vercel talking to a Postgres database on Supabase. Rebuilt 27 Jul 2026 to the tabbed
-*Submit → Coordinator → Travel desk → Accommodation* structure, replacing the earlier sidebar build.
+*Submit → Coordinator → Travel desk → Accommodation* structure, replacing the earlier sidebar build. The Submit,
+Coordinator and Travel Desk tabs now each carry **two request categories** — see "Two request categories" below.
 
 ## Stack and where everything lives
 
@@ -14,7 +15,14 @@ whole change cycle. The back end is a Supabase project named **hasirushaale** (p
 is prefixed `mkn_` or `mkn-`, so it sits alongside the unrelated `hs_*` tables without touching them. Only the
 publishable (anon) key is embedded in the front end; every privileged operation goes through a database function.
 
-## The flow
+## Two request categories
+
+The Submit tab opens with a category toggle: **Intercity Transport & Stay** (the original flow, below) or
+**Intracity Cab** (new). Both share the coordinator and travel desk roles and both show up combined in "Requests
+you've raised", but they are otherwise two independent pipelines with their own tables, statuses and functions —
+a cab request never touches beds or tickets, and an intercity request never touches drivers.
+
+### Intercity Transport & Stay
 
 One request covers one or more travellers and moves through four stages, shown as a stepper on every request card:
 
@@ -29,6 +37,21 @@ exists, which is what the tabs 1-2-3-4 represent.
 
 A traveller marked **Own arrangement** is skipped by the ticket check — they still need a bed, but the travel desk
 is not asked for a PNR.
+
+### Intracity Cab
+
+A shorter, three-stage pipeline for a local cab pickup to or from SSB — no accommodation stage, since it's a same-day
+local trip:
+
+**Submitted** → **Approved** → **Cab booked**
+
+The requester picks a date, time, pickup point (Madivala, Majestic, Silk Board, Bengaluru Railway Station
+Cantonment/KSR, or Airport T1/T2 — the destination is always fixed to SSB), a vehicle type (Innova, Sedan, Mini,
+Tempo Traveller, Bus), a passenger count, and the POC's name/email/phone the travel desk should coordinate pickup
+with. The **coordinator** approves or sends it back exactly like an intercity request. Once approved, the **travel
+desk** enters the driver's name, phone number and the vehicle number and confirms — the coordinator can still
+disapprove an approved cab request, and the travel desk can re-open a booked one to correct the driver details via
+the same "Update booking" action pattern as tickets.
 
 ## Roles
 
@@ -53,7 +76,10 @@ The coordinator's queue has a **To review / Approved** toggle. Approved requests
 details" lets the coordinator correct contact or traveller details (name, age, gender, category, travel mode and
 its detail fields, ID number) any time before the travel desk books a ticket, and "Disapprove" sends an approved
 request back to the requester with a reason, exactly like "Send back" does from the review queue (same
-`mkn_tr_decide` call — it already allowed this transition, it just had no button pointed at it).
+`mkn_tr_decide` call — it already allowed this transition, it just had no button pointed at it). Above that toggle
+sits a second one, **Intercity requests / Intracity cabs**, switching which pipeline the list and stats below are
+showing — the Travel Desk tab has the same second toggle. ("Edit details" is intercity-only for now; cab requests
+don't have an edit path, just approve/send-back and, later, re-open-to-correct-driver-details.)
 
 ## Data model
 
@@ -62,6 +88,13 @@ contact block, travel date, plan, ticket preference and the status. `mkn_trip_tr
 row per person, carrying age, gender, category, ID, travel mode, the conditional travel detail, and — filled in
 later by the desks — `pnr`, `bed_id` and `bed_label`. `mkn_beds` is the bed master: one row per physical bed,
 unique on (location, bed), pointing at the traveller occupying it.
+
+`mkn_cab_requests` is the entire intracity-cab pipeline in one table (no line table — one cab request is one
+booking, not a group of travellers): POC name/email/phone, date, time, `from_location` (checked against the fixed
+pickup list), `to_location` (always SSB), `vehicle_type` (checked against the fixed vehicle list), `pax_count`,
+`status` (`submitted`/`approved`/`booked`/`rejected`), `rejection_reason`, and — filled in by the travel desk on
+booking — `driver_name`, `driver_phone`, `vehicle_number`. IDs are sequential too (`CAB-1001`, …), off their own
+sequence (`mkn_cab_seq`) so they never collide with `REQ-` IDs.
 
 Travel mode is one of **Train**, **Flight**, **Bus** or **Own arrangement**, and each carries its own detail fields:
 train name + number, flight name + number, or bus name. Only the set matching the chosen mode is stored.
@@ -81,6 +114,13 @@ approved it — never while it is still awaiting review or after it has been sen
 `SECURITY DEFINER` function (`mkn_tr_submit`, `mkn_tr_decide`, `mkn_tr_edit`, `mkn_tr_book`, `mkn_tr_set_bed`,
 `mkn_tr_complete`, `mkn_tr_add_beds`, `mkn_tr_remove_beds`, `mkn_tr_rename_location`) that re-checks the caller's
 role server-side, so a tampered browser cannot bypass it. There are no insert/update/delete policies at all.
+
+`mkn_cab_requests` has the same shape of protection, one level simpler since there's no accommodation desk in this
+pipeline: RLS via `mkn_can_see_cab(created_by, status)` (own rows always; coordinator/admin always; travel desk
+only once `approved`/`booked`), and three functions — `mkn_cab_submit` (any signed-in user), `mkn_cab_decide`
+(coordinator/admin, same submitted/approved/rejected transition rules as `mkn_tr_decide`), and `mkn_cab_book`
+(travel desk/admin, accepts re-booking on an already-`booked` request so a driver detail typo can be corrected
+the same way a PNR can).
 
 `mkn_tr_edit` (coordinator/admin) lets a request and its travellers be corrected while status is `submitted` or
 `approved` — once the travel desk has booked a ticket against it, the function refuses further edits from this
@@ -122,8 +162,9 @@ Password for all five: `SSBtest2026!`
 | `stay.test@ssb.local` | Accommodation Desk |
 | `vol.test@ssb.local` | Requester |
 
-Three demo requests (`REQ-1001` submitted, `REQ-1002` approved, `REQ-1003` ticketed) are seeded so every queue is
-populated for a walkthrough. **Delete these accounts and requests before real data goes in.**
+Three demo intercity requests (`REQ-1001` submitted, `REQ-1002` approved, `REQ-1003` ticketed) and one demo cab
+request (`CAB-1006` submitted, raised by `vol.test@ssb.local`) are seeded so every queue is populated for a
+walkthrough. **Delete these accounts and requests before real data goes in.**
 
 ## Known gaps — decide before go-live
 
