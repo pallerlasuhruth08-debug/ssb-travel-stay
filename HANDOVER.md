@@ -139,11 +139,24 @@ left in place and simply not counted in the removed total, rather than silently 
 `mkn_tr_rename_location` moves every bed at a location to a new name in one call and refuses to collide with an
 existing location name.
 
-The raw ID number is **write-only**. `mkn_trip_travellers.id_number` is set by `mkn_tr_submit` and can never be
-read back through the API: the table-level SELECT grant is revoked and re-granted column by column, omitting that
-one column. The app reads `id_number_masked` instead, which stores `XXXX-XXXX-1234` for a 12-digit Aadhaar and
-`AB••••67` otherwise. (A column-level `REVOKE` alone is a no-op while a table-level grant exists — that was caught
-and fixed during the rebuild, so do not "simplify" it back.)
+The raw ID number is still write-only at the table/grant level — `mkn_trip_travellers.id_number`'s SELECT grant is
+revoked and re-granted column by column, omitting that one column, so no direct `.from()` select can ever return
+it (a column-level `REVOKE` alone is a no-op while a table-level grant exists — that was caught and fixed during
+the rebuild, so do not "simplify" it back). Everyone reads `id_number_masked` by default, which stores
+`XXXX-XXXX-1234` for a 12-digit Aadhaar and `AB••••67` otherwise.
+
+Staff (coordinator, travel desk, accommodation desk, admin) can additionally see the **real** ID number and the
+uploaded ID image, needed to actually book travel — a plain requester or POC never can, even for their own
+request. This can't be done with a grant or an RLS policy alone, since `mkn_trip_travellers`'s SELECT policy
+already lets a request's own creator read that row (for the masked view), and RLS filters rows, not columns — so
+column-level access would leak to the creator too. Instead, `mkn_staff_id_numbers(p_traveller_ids uuid[])` is a
+`SECURITY DEFINER` function that raises if the caller isn't staff, otherwise returns the raw `id_number` for the
+given traveller ids; `refresh()` calls it once per load (only when `isStaff()`) and merges the result onto
+`S.requests[].travellers[]` client-side, and `peopleTable()` prefers that real value over the masked one when
+present. ID images follow the same staff-only line, but via the storage side: the `mkn_ids_read` bucket policy is
+`bucket_id = 'mkn-ids' and mkn_is_staff()` with no per-row exception for the creator, so a non-staff viewer's
+"ID proof" cell just says "Uploaded" instead of rendering a `view` link — the raw file was never reachable for
+them at the storage layer regardless of what the front end tried to render.
 
 ID images and tickets live in **private** storage buckets (`mkn-ids`, `mkn-tickets`) and are served only through
 short-lived signed URLs.

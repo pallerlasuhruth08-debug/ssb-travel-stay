@@ -132,6 +132,19 @@ async function refresh() {
   S.requests = reqs.data || [];
   S.beds = beds.data || [];
   S.cabRequests = cabs.data || [];
+
+  if (isStaff()) {
+    const travIds = S.requests.flatMap(r => travellers(r).map(t => t.id));
+    if (travIds.length) {
+      const { data } = await sb.rpc('mkn_staff_id_numbers', { p_traveller_ids: travIds });
+      if (Array.isArray(data)) {
+        const byId = Object.fromEntries(data.map(d => [d.id, d.id_number]));
+        S.requests.forEach(r => travellers(r).forEach(t => {
+          if (byId[t.id] != null) t.id_number = byId[t.id];
+        }));
+      }
+    }
+  }
 }
 
 /* ---------------- shell ---------------- */
@@ -205,7 +218,6 @@ window.signOut = async () => { await sb.auth.signOut(); S.profile = null; S.requ
 function authView() {
   return `<div class="auth-wrap">
     <div class="auth-head">
-      <div class="om">ॐ</div>
       <h2>MKN Travel &amp; Stay</h2>
       <p>Sadhguru Sannidhi, Bengaluru · consecration travel &amp; accommodation</p>
     </div>
@@ -652,8 +664,8 @@ function peopleTable(r) {
       <td>${esc(p.age ?? '—')}</td>
       <td>${esc(p.gender || '—')}</td>
       <td>${esc(p.category || '—')}</td>
-      <td>${esc(p.id_number_masked || '—')}</td>
-      <td>${p.id_image_path ? `<a href="#" onclick="viewFile(event,'mkn-ids','${esc(p.id_image_path)}')">view</a>` : '—'}</td>
+      <td>${esc((isStaff() ? p.id_number : null) || p.id_number_masked || '—')}</td>
+      <td>${isStaff() && p.id_image_path ? `<a href="#" onclick="viewFile(event,'mkn-ids','${esc(p.id_image_path)}')">view</a>` : (p.id_image_path ? 'Uploaded' : '—')}</td>
       <td>${esc(p.travel_mode || '—')}</td>
       <td>${esc(travelDetail(p) || '—')}</td>
       ${r.status === 'booked' || r.status === 'complete' ? `<td>${esc(p.pnr || (needsTicket(p) ? '—' : 'own'))}</td>` : ''}
