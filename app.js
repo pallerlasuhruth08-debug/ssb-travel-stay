@@ -26,6 +26,7 @@ const CAB_STATUS_CHIP = {
   approved:  ['approved',  'Awaiting cab'],
   booked:    ['complete',  'Booked'],
   rejected:  ['rejected',  'Sent back'],
+  cancelled: ['rejected',  'Cancelled'],
 };
 
 const STAGES = ['submitted', 'approved', 'booked', 'complete'];
@@ -36,6 +37,7 @@ const STATUS_CHIP = {
   booked:    ['booked',    'Awaiting bed'],
   complete:  ['complete',  'Confirmed'],
   rejected:  ['rejected',  'Sent back'],
+  cancelled: ['rejected',  'Cancelled'],
 };
 
 const ROLE_LABEL = {
@@ -50,6 +52,7 @@ const TABS = [
   { id: 'accom',  label: '4 · Accommodation',  roles: ['accommodation_desk', 'admin'], badge: 'booked' },
   { id: 'master', label: 'Bed Master',         roles: ['accommodation_desk', 'coordinator', 'admin'] },
   { id: 'people', label: 'People & Roles',     roles: ['admin'] },
+  { id: 'report', label: 'Report',             roles: ['admin'] },
 ];
 
 const TRAV_COLS = ['id', 'request_id', 'sort_order', 'name', 'age', 'gender', 'category',
@@ -63,7 +66,7 @@ const S = {
   solo: blankTrav(), travForm: [], pocTravels: false,
   form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin', signupRole: 'requester',
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
-  coordType: 'intercity', travelType: 'intercity',
+  coordType: 'intercity', travelType: 'intercity', memberDraft: {}, reportType: 'intercity',
 };
 
 /* ---------------- helpers ---------------- */
@@ -209,6 +212,7 @@ function viewBody() {
     case 'accom':  return deskView('accom');
     case 'master': return masterView();
     case 'people': return peopleView();
+    case 'report': return reportView();
     default:       return `<div class="empty"><div class="big">Not found</div></div>`;
   }
 }
@@ -290,7 +294,7 @@ function submitView() {
         <div><h3 style="font-size:20px">Requests you've raised</h3>
           <div class="hint">Open one to see exactly where it stands — review, ticketing, or bed allotment.</div></div>
       </div>
-      ${mine.map(m => m.cab ? cabCard(m.r) : reqCard(m.r)).join('')}
+      ${mine.map(m => m.cab ? cabCard(m.r, myCabSubmitInner(m.r)) : reqCard(m.r, mySubmitInner(m.r))).join('')}
     </div>` : ''}
 
     <div class="card pad">
@@ -647,7 +651,7 @@ window.resetCabForm = () => { S.cabForm = {}; render(); toast('Form cleared.'); 
 
 /* ---------------- shared request card ---------------- */
 function stepper(status) {
-  if (status === 'rejected') return '';
+  if (status === 'rejected' || status === 'cancelled') return '';
   const idx = STAGES.indexOf(status);
   return `<div class="stepper">` + STAGES.map((s, i) => {
     const cls = i < idx ? 'done' : (i === idx ? 'now' : '');
@@ -731,9 +735,141 @@ function listOrEmpty(items, innerFn, emptyMsg, cardFn = reqCard) {
   return items.map(r => cardFn(r, innerFn(r))).join('');
 }
 
+/* ---------------- submit tab: self-service cancel + team member management ---------------- */
+const CANCELLABLE_TR_STATUSES = ['submitted', 'approved', 'booked'];
+const CANCELLABLE_CAB_STATUSES = ['submitted', 'approved'];
+
+function mySubmitInner(r) {
+  const canManage = r.mode === 'poc' && ['submitted', 'approved'].includes(r.status);
+  const canCancel = CANCELLABLE_TR_STATUSES.includes(r.status);
+  return `${canManage ? myTeamManageHTML(r) : ''}
+    ${canCancel ? `<div class="actions"><button class="btn btn-ghost btn-sm" onclick="cancelMyRequest('${r.id}')">Cancel request</button></div>` : ''}`;
+}
+
+function myCabSubmitInner(r) {
+  if (!CANCELLABLE_CAB_STATUSES.includes(r.status)) return '';
+  return `<div class="actions"><button class="btn btn-ghost btn-sm" onclick="cancelMyCabRequest('${r.id}')">Cancel request</button></div>`;
+}
+
+window.cancelMyRequest = async id => {
+  if (!confirm('Cancel this request? This cannot be undone.')) return;
+  const { error } = await sb.rpc('mkn_tr_cancel', { p_request_id: id });
+  if (error) return toast(error.message);
+  await refresh(); render();
+  toast('Request cancelled.');
+};
+
+window.cancelMyCabRequest = async id => {
+  if (!confirm('Cancel this cab request? This cannot be undone.')) return;
+  const { error } = await sb.rpc('mkn_cab_cancel', { p_request_id: id });
+  if (error) return toast(error.message);
+  await refresh(); render();
+  toast('Cab request cancelled.');
+};
+
+function myTeamManageHTML(r) {
+  const list = travellers(r);
+  const draft = S.memberDraft[r.id];
+  return `<div class="workbox">
+    <label>Team members</label>
+    ${list.map(p => `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0">
+      <span style="font-size:13.5px">${esc(p.name)} · ${esc(p.category || '—')}</span>
+      ${list.length > 1 ? `<button class="x-btn" onclick="removeMyMember('${r.id}','${p.id}')">Remove</button>` : ''}
+    </div>`).join('')}
+    ${draft ? memberDraftFormHTML(r.id, draft) : `<button class="btn btn-ghost btn-sm" onclick="startMemberAdd('${r.id}')">+ Add member</button>`}
+  </div>`;
+}
+
+function memberDraftFormHTML(reqId, t) {
+  return `<div class="trav-card" style="margin-top:10px">
+    <div class="field"><label>Name</label>
+      <input value="${esc(t.name)}" placeholder="Member name" oninput="setMemberDraftField('${reqId}','name',this.value)"></div>
+    <div class="grid3">
+      <div class="field"><label>Age</label><input value="${esc(t.age)}" inputmode="numeric" oninput="setMemberDraftField('${reqId}','age',this.value)"></div>
+      <div class="field"><label>Gender</label><select onchange="setMemberDraftField('${reqId}','gender',this.value)">
+        <option value="">—</option>
+        ${GENDERS.map(g => `<option ${t.gender === g ? 'selected' : ''}>${g}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Category</label><select onchange="setMemberDraftField('${reqId}','category',this.value)">
+        ${CATEGORIES.map(c => `<option ${t.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+      </select></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>ID card number</label>
+        <input value="${esc(t.idNumber)}" placeholder="e.g. Aadhaar / passport no." oninput="setMemberDraftField('${reqId}','idNumber',this.value)"></div>
+      <div class="field"><label>Travel preference</label><select onchange="setMemberDraftField('${reqId}','travel',this.value,true)">
+        ${TRAVEL_MODES.map(m => `<option value="${m}" ${t.travel === m ? 'selected' : ''}>${TRAVEL_MODE_LABEL[m]}</option>`).join('')}
+      </select></div>
+    </div>
+    ${memberDraftDetailFieldsHTML(reqId, t)}
+    <div class="field" style="margin-bottom:0"><label>ID proof upload</label>
+      <input type="file" accept="image/*,.pdf" onchange="setMemberDraftFile('${reqId}', this.files[0])">
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary btn-sm" onclick="saveMemberAdd('${reqId}')">Add member</button>
+      <button class="btn btn-ghost btn-sm" onclick="cancelMemberAdd('${reqId}')">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function memberDraftDetailFieldsHTML(reqId, t) {
+  const on = k => `oninput="setMemberDraftField('${reqId}','${k}',this.value)"`;
+  if (t.travel === 'Train') return `<div class="grid2">
+    <div class="field"><label>Train name</label><input value="${esc(t.trainName)}" ${on('trainName')}></div>
+    <div class="field"><label>Train number</label><input value="${esc(t.trainNumber)}" ${on('trainNumber')}></div></div>`;
+  if (t.travel === 'Flight') return `<div class="grid2">
+    <div class="field"><label>Flight name / airline</label><input value="${esc(t.flightName)}" ${on('flightName')}></div>
+    <div class="field"><label>Flight number</label><input value="${esc(t.flightNumber)}" ${on('flightNumber')}></div></div>`;
+  if (t.travel === 'Bus') return `<div class="field"><label>Bus name / operator</label>
+    <input value="${esc(t.busName)}" ${on('busName')}></div>`;
+  return '';
+}
+
+window.startMemberAdd = reqId => { S.memberDraft[reqId] = blankTrav(); render(); };
+window.cancelMemberAdd = reqId => { delete S.memberDraft[reqId]; render(); };
+window.setMemberDraftField = (reqId, key, value, rerender) => {
+  const t = S.memberDraft[reqId]; if (!t) return;
+  t[key] = value;
+  if (rerender) render();
+};
+window.setMemberDraftFile = (reqId, file) => {
+  const t = S.memberDraft[reqId]; if (!t) return;
+  t.file = file; render();
+};
+
+window.saveMemberAdd = async reqId => {
+  const t = S.memberDraft[reqId];
+  if (!t) return;
+  const name = (t.name || '').trim();
+  if (!name) return toast('Please enter a name.');
+  if (!t.age || !t.gender) return toast('Age and gender are needed for this member.');
+
+  S.busy = true; render();
+  try {
+    const path = await uploadId(t);
+    const { error } = await sb.rpc('mkn_tr_add_member', { p_request_id: reqId, p_traveller: travPayload(t, name, path) });
+    if (error) throw error;
+    delete S.memberDraft[reqId];
+    S.busy = false;
+    await refresh(); render();
+    toast('Member added.');
+  } catch (err) {
+    S.busy = false; render();
+    toast(err.message || String(err));
+  }
+};
+
+window.removeMyMember = async (reqId, travellerId) => {
+  if (!confirm('Remove this member from the request?')) return;
+  const { error } = await sb.rpc('mkn_tr_remove_member', { p_request_id: reqId, p_traveller_id: travellerId });
+  if (error) return toast(error.message);
+  await refresh(); render();
+  toast('Member removed.');
+};
+
 /* ---------------- shared cab request card ---------------- */
 function cabStepper(status) {
-  if (status === 'rejected') return '';
+  if (status === 'rejected' || status === 'cancelled') return '';
   const stages = ['submitted', 'approved', 'booked'];
   const labels = { submitted: 'Submitted', approved: 'Approved', booked: 'Cab booked' };
   const idx = stages.indexOf(status);
@@ -1275,6 +1411,91 @@ window.setRole = async (uid, r) => {
   if (error) return toast(error.message);
   await loadPeople();
   toast('Role updated.');
+};
+
+/* ---------------- report (admin) ---------------- */
+const REPORT_COLS = {
+  intercity: ['Request ID', 'Status', 'Mode', 'Team', 'Contact Name', 'Contact Phone', 'Contact Email',
+    'Origin', 'Travel Date', 'Plan', 'Ticket Pref', 'Rejection Reason', 'Traveller Name', 'Age', 'Gender',
+    'Category', 'ID Number', 'Travel Mode', 'Travel Detail', 'PNR', 'Bed', 'Submitted At'],
+  cab: ['Cab ID', 'Status', 'POC Name', 'POC Phone', 'POC Email', 'Travel Date', 'Time', 'From', 'To',
+    'Vehicle Type', 'Pax', 'Driver Name', 'Driver Phone', 'Vehicle Number', 'Rejection Reason', 'Submitted At'],
+};
+
+function buildIntercityReportRows() {
+  const rows = [];
+  S.requests.forEach(r => {
+    const list = travellers(r);
+    (list.length ? list : [null]).forEach(p => rows.push([
+      r.id, r.status, r.mode, r.team || '', r.contact_name, r.contact_phone || '', r.contact_email || '',
+      r.origin || '', r.travel_date || '', r.plan || '', r.ticket_pref || '', r.rejection_reason || '',
+      p ? p.name : '', p ? (p.age ?? '') : '', p ? (p.gender || '') : '', p ? (p.category || '') : '',
+      p ? (p.id_number || p.id_number_masked || '') : '', p ? (p.travel_mode || '') : '',
+      p ? travelDetail(p) : '', p ? (p.pnr || '') : '', p ? (p.bed_label || '') : '', r.created_at || '',
+    ]));
+  });
+  return rows;
+}
+
+function buildCabReportRows() {
+  return S.cabRequests.map(r => [
+    r.id, r.status, r.poc_name, r.poc_phone || '', r.poc_email || '', r.travel_date || '',
+    cabTimeLabel(r.travel_time), r.from_location, r.to_location, r.vehicle_type, r.pax_count ?? '',
+    r.driver_name || '', r.driver_phone || '', r.vehicle_number || '', r.rejection_reason || '', r.created_at || '',
+  ]);
+}
+
+function csvCell(v) {
+  const s = String(v ?? '');
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function toCSV(columns, rows) {
+  return [columns, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
+}
+
+function reportView() {
+  const cab = S.reportType === 'cab';
+  const columns = cab ? REPORT_COLS.cab : REPORT_COLS.intercity;
+  const rows = cab ? buildCabReportRows() : buildIntercityReportRows();
+  return `<div class="view active">
+    <div class="view-head"><h2>Report</h2>
+      <p>Every field across ${cab ? 'cab' : 'intercity'} requests in one flat table — one row per ${cab ? 'cab request' : 'traveller'}. Download it as a spreadsheet to filter, sort or pivot in Excel.</p></div>
+    <div class="seg" style="margin-bottom:18px">
+      <button class="${!cab ? 'on' : ''}" onclick="setReportType('intercity')">Intercity requests</button>
+      <button class="${cab ? 'on' : ''}" onclick="setReportType('cab')">Intracity cabs</button>
+    </div>
+    <div class="card pad">
+      <div class="actions" style="margin-top:0;margin-bottom:14px">
+        <button class="btn btn-primary btn-sm" onclick="downloadReport()">⬇ Download as Excel (CSV)</button>
+        <span class="hint">${rows.length} row${rows.length === 1 ? '' : 's'}</span>
+      </div>
+      <div style="overflow-x:auto"><table class="master">
+        <thead><tr>${columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.length
+          ? rows.map(row => `<tr>${row.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('')
+          : `<tr><td colspan="${columns.length}" class="empty">No data yet.</td></tr>`}
+        </tbody></table></div>
+    </div>
+  </div>`;
+}
+
+window.setReportType = t => { S.reportType = t; render(); };
+
+window.downloadReport = () => {
+  const cab = S.reportType === 'cab';
+  const columns = cab ? REPORT_COLS.cab : REPORT_COLS.intercity;
+  const rows = cab ? buildCabReportRows() : buildIntercityReportRows();
+  const csv = toCSV(columns, rows);
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM so Excel reads UTF-8 names correctly
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mkn-${cab ? 'cab' : 'intercity'}-report-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 };
 
 boot();

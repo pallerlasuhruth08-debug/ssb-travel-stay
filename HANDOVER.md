@@ -38,6 +38,9 @@ exists, which is what the tabs 1-2-3-4 represent.
 A traveller marked **Own arrangement** is skipped by the ticket check — they still need a bed, but the travel desk
 is not asked for a PNR.
 
+A request can also end in **Cancelled** — the requester's own call, any time before it's housed — alongside the
+existing **Rejected** (the coordinator's call). Both drop out of the stepper entirely, same as each other.
+
 ### Intracity Cab
 
 A shorter, three-stage pipeline for a local cab pickup to or from SSB — no accommodation stage, since it's a same-day
@@ -53,7 +56,8 @@ picking the same place for both is blocked client-side), a vehicle type (Innova,
 Bus), a passenger count, and the POC's name/email/phone the travel desk should coordinate pickup with. The **coordinator** approves or sends it back exactly like an intercity request. Once approved, the **travel
 desk** enters the driver's name, phone number and the vehicle number and confirms — the coordinator can still
 disapprove an approved cab request, and the travel desk can re-open a booked one to correct the driver details via
-the same "Update booking" action pattern as tickets.
+the same "Update booking" action pattern as tickets. A cab request can also be **Cancelled** by its own requester
+while it's still submitted or approved — not once a cab is actually booked.
 
 ## Roles
 
@@ -72,11 +76,22 @@ trigger only ever assigns `poc` or `requester` off that metadata field — a tam
 | Coordinator | Submit, Coordinator, Bed Master (read-only) |
 | Travel Desk | Submit, Travel Desk |
 | Accommodation Desk | Submit, Accommodation, Bed Master (editable) |
-| Admin | all six, including People & Roles |
+| Admin | all seven, including People & Roles and Report |
 
 Everyone keeps the Submit tab — staff travel too — and the panel at the top of it now shows the *full* card for
 each request you raised (stepper, traveller table, PNR/bed once assigned), not just a status chip, so you can see
-exactly where it stands.
+exactly where it stands. From that same card, a requester can **cancel their own request** at any point before it's
+fully done (intercity: any stage up to and including ticketed, but not once housed; cab: submitted or approved, but
+not once booked) via `mkn_tr_cancel`/`mkn_cab_cancel` — either function also accepts a staff caller, not just the
+original creator. Cancelling an intercity request frees any bed already allotted to its travellers.
+
+A **Team POC** can additionally **add or remove members on their own team request** at any time while it's still
+`submitted` or `approved` — team composition often isn't final at submission time. This uses two new functions,
+`mkn_tr_add_member`/`mkn_tr_remove_member`, mirroring the existing `mkn_tr_add_beds`/`mkn_tr_remove_beds` pattern:
+both check the caller is the request's own creator (or staff), that the request is still `mode = 'poc'`, and that
+it hasn't been ticketed yet. Removing is blocked once a team is down to its last member — a request always needs at
+least one traveller. This is separate from the coordinator's "Edit details", which only edits existing travellers'
+fields and still can't add or remove people from the list.
 
 The coordinator's queue has a **To review / Approved** toggle. Approved requests stay reachable there — "Edit
 details" lets the coordinator correct contact or traveller details (name, age, gender, category, travel mode and
@@ -172,6 +187,25 @@ desk's toggle is *Awaiting ticket* / *Booked* — the Booked side shows already-
 correct a PNR via the same "Update booking" action (`mkn_tr_book` now accepts corrections on `booked`/`complete`
 requests, not just `approved` ones). Accommodation's toggle is *Awaiting bed* / *Housed* — the Housed side shows
 fully-allotted requests, and "Change" next to any traveller's bed still works there to reassign it.
+
+## Report tab (admin only)
+
+A seventh tab, visible only to Admin, exists purely to get data *out* of the app. It has an **Intercity requests /
+Intracity cabs** toggle just like Coordinator and Travel Desk, and renders every field from the currently-loaded
+`S.requests`/`S.cabRequests` (already in browser memory — no extra query) as one flat table: one row per traveller
+for intercity requests (so a 3-person team produces 3 rows sharing the same request-level fields), one row per
+booking for cabs. This is deliberately a flat, denormalized table rather than a true pivot — "pivot-ready" data the
+admin can pivot themselves once it's in Excel, not aggregation done server-side.
+
+"⬇ Download as Excel (CSV)" builds a UTF-8 CSV (with a BOM, so Excel doesn't mis-decode names) client-side via
+`toCSV()` + a `Blob`/`URL.createObjectURL` anchor-click download — no server round-trip, no new backend function,
+no added dependency (a real `.xlsx` would need a library; Excel opens `.csv` natively so this was the simplest
+correct choice given the no-build-step constraint). Verified with a real headless-Chromium run (not just jsdom,
+which doesn't fully implement `Blob`/`URL.createObjectURL`/download events) confirming the actual downloaded file's
+BOM, header row, and comma/quote/newline escaping are all correct.
+
+Because the raw ID number is only ever present client-side for staff (see the ID-number section above), and Admin
+is staff, the report's "ID Number" column shows the real value, not the masked one — same rule as everywhere else.
 
 ## Test accounts
 
