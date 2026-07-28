@@ -46,9 +46,11 @@ local trip:
 **Submitted** → **Approved** → **Cab booked**
 
 The requester picks a date, time, pickup point (Madivala, Majestic, Silk Board, Bengaluru Railway Station
-Cantonment/KSR, or Airport T1/T2 — the destination is always fixed to SSB), a vehicle type (Innova, Sedan, Mini,
-Tempo Traveller, Bus), a passenger count, and the POC's name/email/phone the travel desk should coordinate pickup
-with. The **coordinator** approves or sends it back exactly like an intercity request. Once approved, the **travel
+Cantonment/KSR, Airport T1/T2, or IYC Coimbatore Ashram), a destination (defaults to SSB, but can instead be
+Coimbatore Railway Station, IYC Coimbatore Ashram, or Coimbatore Bus Stand — covering local cab hops at the
+Coimbatore end for travellers connecting to/from an intercity train or bus, not just the Bengaluru-side SSB run;
+picking the same place for both is blocked client-side), a vehicle type (Innova, Sedan, Mini, Tempo Traveller,
+Bus), a passenger count, and the POC's name/email/phone the travel desk should coordinate pickup with. The **coordinator** approves or sends it back exactly like an intercity request. Once approved, the **travel
 desk** enters the driver's name, phone number and the vehicle number and confirms — the coordinator can still
 disapprove an approved cab request, and the travel desk can re-open a booked one to correct the driver details via
 the same "Update booking" action pattern as tickets.
@@ -94,8 +96,9 @@ later by the desks — `pnr`, `bed_id` and `bed_label`. `mkn_beds` is the bed ma
 unique on (location, bed), pointing at the traveller occupying it.
 
 `mkn_cab_requests` is the entire intracity-cab pipeline in one table (no line table — one cab request is one
-booking, not a group of travellers): POC name/email/phone, date, time, `from_location` (checked against the fixed
-pickup list), `to_location` (always SSB), `vehicle_type` (checked against the fixed vehicle list), `pax_count`,
+booking, not a group of travellers): POC name/email/phone, date, time, `from_location` and `to_location` (each
+checked against their own fixed list — defaults to SSB if left unset), `vehicle_type` (checked against the fixed
+vehicle list), `pax_count`,
 `status` (`submitted`/`approved`/`booked`/`rejected`), `rejection_reason`, and — filled in by the travel desk on
 booking — `driver_name`, `driver_phone`, `vehicle_number`. IDs are sequential too (`CAB-1001`, …), off their own
 sequence (`mkn_cab_seq`) so they never collide with `REQ-` IDs.

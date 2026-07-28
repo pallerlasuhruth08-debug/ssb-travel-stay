@@ -16,8 +16,10 @@ const NO_TICKET_MODES = ['Own arrangement', 'Ashram bus', 'Ashram vehicle'];
 const DEFAULT_ORIGIN = 'Isha Yoga Center, Coimbatore';
 
 const CAB_FROM = ['Madivala', 'Majestic', 'Silk Board',
-  'Bengaluru Railway Station (Cantonment)', 'Bengaluru Railway Station (KSR)', 'Airport T1', 'Airport T2'];
-const CAB_TO = 'Sadhguru Sannidhi, Bengaluru (SSB)';
+  'Bengaluru Railway Station (Cantonment)', 'Bengaluru Railway Station (KSR)', 'Airport T1', 'Airport T2',
+  'IYC Coimbatore Ashram'];
+const CAB_TO_DEFAULT = 'Sadhguru Sannidhi, Bengaluru (SSB)';
+const CAB_TO = [CAB_TO_DEFAULT, 'Coimbatore Railway Station', 'IYC Coimbatore Ashram', 'Coimbatore Bus Stand'];
 const CAB_VEHICLES = ['Innova', 'Sedan', 'Mini', 'Tempo Traveller', 'Bus'];
 const CAB_STATUS_CHIP = {
   submitted: ['submitted', 'Awaiting review'],
@@ -279,7 +281,7 @@ function submitView() {
     <div class="view-head">
       <h2>New ${cab ? 'intracity cab' : 'intercity transport &amp; stay'} request</h2>
       <p>${cab
-        ? 'Raise a request for a cab within Bengaluru, to or from SSB. It goes to the coordinator for approval, then to the travel desk to be booked.'
+        ? 'Raise a request for a local cab — within Bengaluru to or from SSB, or between the Coimbatore ashram and the station/bus stand. It goes to the coordinator for approval, then to the travel desk to be booked.'
         : 'Raise a request for yourself, or as a POC on behalf of your team. Each traveller needs age, gender, category and an ID for ticket booking.'}</p>
     </div>
 
@@ -379,7 +381,9 @@ function cabFormHTML() {
           <option value="">— select pickup —</option>
           ${CAB_FROM.map(f => `<option ${cf.from === f ? 'selected' : ''}>${f}</option>`).join('')}
         </select></div>
-        <div class="field"><label>To</label><input value="${esc(CAB_TO)}" disabled></div>
+        <div class="field"><label>To</label><select id="cabTo">
+          ${CAB_TO.map(t => `<option ${(cf.to ?? CAB_TO_DEFAULT) === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select></div>
       </div>
       <div class="grid2">
         <div class="field"><label>Type of vehicle</label><select id="cabVehicle">
@@ -496,7 +500,7 @@ function captureForm() {
 function captureCabForm() {
   if (S.view !== 'submit') return;
   const f = S.cabForm;
-  [['cabDate', 'date'], ['cabTime', 'time'], ['cabFrom', 'from'], ['cabVehicle', 'vehicle'],
+  [['cabDate', 'date'], ['cabTime', 'time'], ['cabFrom', 'from'], ['cabTo', 'to'], ['cabVehicle', 'vehicle'],
    ['cabPax', 'pax'], ['cabPocName', 'pocName'], ['cabPocPhone', 'pocPhone'], ['cabPocEmail', 'pocEmail']].forEach(([id, key]) => {
     if (el(id)) f[key] = el(id).value;
   });
@@ -615,6 +619,8 @@ async function submitCabRequest() {
   const f = S.cabForm;
   if (!(f.pocName || '').trim()) return toast('Please enter the POC name.');
   if (!f.from) return toast('Pick a pickup location.');
+  const to = f.to || CAB_TO_DEFAULT;
+  if (to === f.from) return toast('Pickup and destination can\'t be the same place.');
   if (!f.vehicle) return toast('Pick a type of vehicle.');
 
   S.busy = true; render();
@@ -623,7 +629,7 @@ async function submitCabRequest() {
       p_request: {
         poc_name: f.pocName.trim(), poc_email: f.pocEmail || '', poc_phone: f.pocPhone || '',
         travel_date: f.date || '', travel_time: f.time || '',
-        from_location: f.from, vehicle_type: f.vehicle, pax_count: f.pax || '',
+        from_location: f.from, to_location: to, vehicle_type: f.vehicle, pax_count: f.pax || '',
       },
     });
     if (error) throw error;
@@ -750,7 +756,7 @@ function cabCard(r, inner) {
     <div class="req-head" onclick="toggleReq('${r.id}')">
       <div class="req-avatar">🚕</div>
       <div><div class="req-title">${esc(r.poc_name)}</div>
-        <div class="req-sub">Intracity cab · ${esc(r.from_location)} → SSB · ${esc(r.travel_date || 'no date')}${cabTimeLabel(r.travel_time) ? ' · ' + esc(cabTimeLabel(r.travel_time)) : ''}</div></div>
+        <div class="req-sub">Intracity cab · ${esc(r.from_location)} → ${esc(r.to_location === CAB_TO_DEFAULT ? 'SSB' : r.to_location)} · ${esc(r.travel_date || 'no date')}${cabTimeLabel(r.travel_time) ? ' · ' + esc(cabTimeLabel(r.travel_time)) : ''}</div></div>
       <div class="req-right"><span class="chip mode">${esc(r.vehicle_type)}${r.pax_count ? ' · ' + esc(r.pax_count) + ' pax' : ''}</span>${cabStatusChip(r.status)}<span class="caret">▶</span></div>
     </div>
     <div class="req-body">
