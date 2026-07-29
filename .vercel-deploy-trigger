@@ -1,0 +1,7 @@
+Trigger a fresh Vercel git-integration production deploy.
+
+Production had drifted to a broken state from inline API deploys that
+could not reliably transfer vendor/supabase.js (110KB). Vercel's git
+integration builds straight from this repo instead, avoiding that
+transfer path. This file's presence just gives the integration a new
+commit on main to build and promote to production.
