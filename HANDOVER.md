@@ -30,6 +30,14 @@ error, silently freezing the page on the "Loading…" placeholder forever with n
 identically on both GitHub Pages and Vercel. `app.js` now also checks `window.supabase` before use and shows a
 clear error message instead of hanging silently, as a safety net for the vendored file itself ever failing to load.
 
+The same freeze could happen a second way: `boot()`'s `sb.auth.getSession()` call restores whatever session token
+is in that browser's `localStorage`, refreshing it if expired — a broken or invalidated stored token (e.g. from a
+password changed directly in the database, bypassing the normal reset flow) could throw there, and an uncaught
+throw at that point in `boot()` meant `render()` never ran, freezing the page exactly like the CDN issue did. `boot()`
+now wraps that call in a try/catch: on any failure it clears local session/profile state, calls `sb.auth.signOut()`
+to drop the bad stored token, and always falls through to `render()` so the sign-in screen shows no matter what
+went wrong restoring the session.
+
 ## Two request categories
 
 The Submit tab opens with a category toggle: **Intercity Transport & Stay** (the original flow, below) or

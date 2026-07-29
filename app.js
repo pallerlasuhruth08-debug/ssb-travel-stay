@@ -127,9 +127,19 @@ async function boot() {
     if (s) await loadAll(); else S.profile = null;
     render();
   });
-  const { data: { session } } = await sb.auth.getSession();
-  S.session = session;
-  if (session) await loadAll();
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    S.session = session;
+    if (session) await loadAll();
+  } catch (err) {
+    // A broken or expired stored session (e.g. after a password reset invalidated a token
+    // this browser still had saved) must never leave the page frozen on "Loading…" forever --
+    // same principle as the vendored-script load guard above. Fall back to a clean signed-out
+    // state so the sign-in screen renders regardless of what went wrong restoring the session.
+    console.error('Failed to restore session, signing out locally:', err);
+    S.session = null; S.profile = null;
+    try { await sb.auth.signOut(); } catch (_) { /* already broken; nothing more to do */ }
+  }
   render();
 }
 
