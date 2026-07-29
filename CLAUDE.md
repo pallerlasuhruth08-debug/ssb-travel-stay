@@ -62,6 +62,10 @@ change — there is no virtual DOM or diffing:
   the signed-in user's role, and `goView`/`loadAll` both guard against rendering a view the current role can't see.
 - All server-facing functions are called via `sb.rpc(name, params)`, never `sb.from(table).insert/update(...)`
   directly — mutations always go through the `SECURITY DEFINER` functions described above.
+- Every `sb.auth.*` call goes through the `call()` helper, and post-login data loads through `loadAllSafe()`.
+  `supabase-js` *rejects* on a request that never completes (offline, blocked, CDN/firewall), and an unguarded
+  rejection inside a click handler silently leaves the button stuck on "Please wait…" with no error shown. Don't
+  add a bare `await sb.auth.x()` to a handler — see "Auth calls must never fail silently" in `HANDOVER.md`.
 
 ### Two request categories, one shared UI
 
