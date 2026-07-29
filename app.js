@@ -1,6 +1,15 @@
 /* MKN Travel & Stay · SSB Bengaluru — vanilla JS + Supabase. */
 const SUPABASE_URL = 'https://zbqetpvgipgagmmyupcn.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9N-AtGZTNYsOLNAYj1W8AQ_ya6ccY6C';
+
+// If vendor/supabase.js failed to load (slow connection, blocked request, bad cache), the
+// rest of this script can't run at all -- without this check that failure was silent, an
+// uncaught TypeError on the next line, leaving the page stuck on "Loading…" forever with
+// no indication anything went wrong.
+if (!window.supabase) {
+  document.getElementById('app').innerHTML = `<div class="loading">Couldn't load a required script — check your internet connection and reload the page.</div>`;
+  throw new Error('Supabase client library failed to load (window.supabase is undefined).');
+}
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const CATEGORIES = ['Poornanga', 'Brahmachari', 'POC', 'Core Volunteer', 'Ishanga'];
