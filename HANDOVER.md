@@ -134,7 +134,32 @@ Three ways to deal with a lost/forgotten password, in order of preference:
    via `pgcrypto` (installed in the `extensions` schema), e.g.
    `update auth.users set encrypted_password = extensions.crypt('<new password>', extensions.gen_salt('bf', 6)) where email = '<email>';`
    — matches the bcrypt cost factor (`$2a$06$`) Supabase's own hashes use. Only do this for an account you've
-   confirmed the owner of; it bypasses email verification entirely.
+   confirmed the owner of; it bypasses email verification entirely. Verify it took with
+   `select encrypted_password = extensions.crypt('<new password>', encrypted_password) from auth.users where email = '<email>';`
+   — that's the same bcrypt comparison the Auth server does at sign-in, so `true` means the password really works.
+
+### Auth calls must never fail silently
+
+`supabase-js` **rejects** (rather than resolving with an `.error`) when a request never completes at all — offline,
+DNS/proxy blocked, an ad-blocker, a captive portal, Supabase unreachable. Unguarded, that rejection escapes the
+`onclick` handler, leaving the button disabled on "Please wait…" with **no message at all** — the "I click Sign in
+and nothing happens" report. Every auth call therefore goes through the `call()` helper in `app.js`, which converts a
+thrown request into the same `{ error: { message } }` shape the callers already display, and every button restores
+its own label/enabled state on failure. `loadAllSafe()` does the same for the post-sign-in data load, so a data
+failure can't strand a successfully-signed-in user on a dead sign-in screen. When adding any new
+`sb.auth.*` call, wrap it in `call()` — a bare `await sb.auth.x()` in a click handler reintroduces this bug.
+
+### Every signed-in user must have a profile row
+
+`mkn_role()` returns `'anon'` when there's no `mkn_profiles` row for `auth.uid()`, and every `SECURITY DEFINER` write
+function checks that role — so a user without a profile row can sign in normally and then have **every** submission
+rejected as "Not authorised", while also being invisible in *People & Roles* so no admin can grant them a role to fix
+it. Two real accounts were found in exactly this state (created before the `on_auth_user_created_mkn` trigger
+existed) and have been backfilled. `mkn_ensure_profile()` now materialises a missing row on demand — `loadAll()`
+calls it when the profile select comes back empty. It only ever creates `requester` (or `poc`, from the sign-up
+metadata), never overwrites an existing row, and is granted to `authenticated` only, so it can't be used to escalate
+a role. Check with:
+`select count(*) from auth.users u left join mkn_profiles p on p.id = u.id where p.id is null;` — should always be 0.
 
 A successful submission now shows a **persistent confirmation banner** at the top of the Submit tab (request/team id,
 "…awaiting coordinator approval" stated outright in the headline) instead of relying solely on the toast, which

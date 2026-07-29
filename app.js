@@ -101,10 +101,30 @@ function blankTrav(extra) {
 let toastTimer;
 function toast(msg) {
   const t = el('toast');
+  if (!t) { console.warn('toast:', msg); return; } // never let the error reporter itself throw
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 3600);
+}
+
+/* supabase-js *rejects* (rather than resolving with an `.error`) when the request itself never
+   completes -- offline, DNS/proxy blocked, an ad-blocker, a captive portal, Supabase unreachable.
+   Left unguarded that rejection escapes an onclick handler, so the button stays disabled on
+   "Please wait…" and the user gets no feedback whatsoever -- the "I click Sign in and nothing
+   happens" report. Funnel every auth call through this so a thrown request turns into the same
+   `{ error }` shape each caller already knows how to display. */
+const NET_MSG = "Couldn't reach the server — check your internet connection and try again.";
+async function call(fn) {
+  try { return await fn(); }
+  catch (err) { console.error('Network call failed:', err); return { data: null, error: { message: NET_MSG } }; }
+}
+
+/* Same idea for the post-sign-in data load: a failure here must never strand the caller with a
+   disabled button and a half-rendered page. Reports the problem and lets the caller carry on. */
+async function loadAllSafe() {
+  try { await loadAll(); return true; }
+  catch (err) { console.error('Failed to load app data:', err); toast(NET_MSG); return false; }
 }
 
 function travelDetail(p) {
@@ -124,13 +144,13 @@ async function boot() {
     const changed = (s?.user?.id) !== (S.session?.user?.id);
     S.session = s;
     if (!changed) return;
-    if (s) await loadAll(); else S.profile = null;
+    if (s) await loadAllSafe(); else S.profile = null;
     render();
   });
   try {
     const { data: { session } } = await sb.auth.getSession();
     S.session = session;
-    if (session) await loadAll();
+    if (session) await loadAllSafe();
   } catch (err) {
     // A broken or expired stored session (e.g. after a password reset invalidated a token
     // this browser still had saved) must never leave the page frozen on "Loading…" forever --
@@ -144,7 +164,15 @@ async function boot() {
 }
 
 async function loadAll() {
-  const { data: profile } = await sb.from('mkn_profiles').select('*').eq('id', S.session.user.id).maybeSingle();
+  let { data: profile } = await sb.from('mkn_profiles').select('*').eq('id', S.session.user.id).maybeSingle();
+  // A missing row means the account predates the sign-up trigger (or the row was removed). Server
+  // side that makes mkn_role() 'anon', so every write RPC rejects them with "Not authorised" and
+  // they never show up in People & Roles for an admin to fix. Materialise the row instead of
+  // assuming a client-side 'requester' the server won't agree with.
+  if (!profile) {
+    const { data: made } = await sb.rpc('mkn_ensure_profile');
+    profile = Array.isArray(made) ? made[0] : made;
+  }
   S.profile = profile || { id: S.session.user.id, email: S.session.user.email, role: 'requester' };
   if (!allowedTabs().some(t => t.id === S.view)) S.view = allowedTabs()[0]?.id || 'submit';
   await refresh();
@@ -249,7 +277,16 @@ function viewBody() {
 }
 
 window.goView = v => { S.view = v; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-window.signOut = async () => { await sb.auth.signOut(); S.profile = null; S.requests = []; S.beds = []; S.changePw = false; render(); };
+/* Clears local state unconditionally: if signOut() can't reach the server the token is still
+   dropped from this browser, so the button never looks dead. S.session must be cleared here
+   rather than relying on the SIGNED_OUT listener -- otherwise render() still sees a session
+   and redraws the signed-in shell. */
+window.signOut = async () => {
+  await call(() => sb.auth.signOut());
+  S.session = null; S.profile = null; S.requests = []; S.beds = []; S.cabRequests = [];
+  S.changePw = false; S.recovery = false;
+  render();
+};
 
 /* ---------------- auth ---------------- */
 function authView() {
@@ -296,7 +333,7 @@ function wireAuth() {
     if (S.authMode === 'reset') {
       if (!email) return toast('Enter your email.');
       btn.disabled = true; btn.textContent = 'Sending…';
-      const r = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      const r = await call(() => sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname }));
       btn.disabled = false; btn.textContent = 'Send reset link';
       if (r.error) return toast(r.error.message);
       S.authMode = 'signin'; render();
@@ -304,14 +341,21 @@ function wireAuth() {
     }
     const pw = val('auPw');
     if (!email || !pw) return toast('Enter your email and password.');
+    // Checked client-side so a too-short password fails instantly and consistently with the
+    // recovery and change-password panels, instead of costing a round trip to be told the same.
+    if (S.authMode === 'signup' && pw.length < 6) return toast('Password must be at least 6 characters.');
+    const restore = () => { btn.disabled = false; btn.textContent = S.authMode === 'signup' ? 'Create account' : 'Sign in'; };
     btn.disabled = true; btn.textContent = 'Please wait…';
     const r = S.authMode === 'signup'
-      ? await sb.auth.signUp({ email, password: pw, options: { data: { full_name: val('auName') || email.split('@')[0], signup_role: S.signupRole } } })
-      : await sb.auth.signInWithPassword({ email, password: pw });
-    if (r.error) { btn.disabled = false; btn.textContent = S.authMode === 'signup' ? 'Create account' : 'Sign in'; return toast(r.error.message); }
-    S.session = r.data.session;
-    if (!S.session) { btn.disabled = false; S.authMode = 'signin'; render(); return toast('Account created — now sign in.'); }
-    await loadAll(); render();
+      ? await call(() => sb.auth.signUp({ email, password: pw, options: { data: { full_name: val('auName') || email.split('@')[0], signup_role: S.signupRole } } }))
+      : await call(() => sb.auth.signInWithPassword({ email, password: pw }));
+    if (r.error) { restore(); return toast(r.error.message); }
+    S.session = r.data?.session || null;
+    // No session back from a successful sign-up means the project requires email confirmation --
+    // telling them to "now sign in" would send them straight into an Invalid-credentials wall.
+    if (!S.session) { restore(); S.authMode = 'signin'; render(); return toast('Account created — check your email to confirm it, then sign in.'); }
+    await loadAllSafe();
+    render();
   };
   btn.onclick = submit;
   ['auEmail', 'auPw', 'auName'].forEach(id => { if (el(id)) el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
@@ -340,14 +384,15 @@ function wireRecovery() {
     if (!pw || pw.length < 6) return toast('Password must be at least 6 characters.');
     if (pw !== pw2) return toast('Passwords do not match.');
     btn.disabled = true; btn.textContent = 'Please wait…';
-    const r = await sb.auth.updateUser({ password: pw });
+    const r = await call(() => sb.auth.updateUser({ password: pw }));
     if (r.error) { btn.disabled = false; btn.textContent = 'Set new password'; return toast(r.error.message); }
     S.recovery = false;
     toast('Password updated — you\'re signed in.');
-    await loadAll(); render();
+    await loadAllSafe();
+    render();
   };
   btn.onclick = submit;
-  ['rcPw', 'rcPw2'].forEach(id => { el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
+  ['rcPw', 'rcPw2'].forEach(id => { if (el(id)) el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
 }
 
 /* ---------------- in-app change password (while signed in) ---------------- */
@@ -375,7 +420,7 @@ function wireChangePw() {
     if (!pw || pw.length < 6) return toast('Password must be at least 6 characters.');
     if (pw !== pw2) return toast('Passwords do not match.');
     btn.disabled = true; btn.textContent = 'Updating…';
-    const r = await sb.auth.updateUser({ password: pw });
+    const r = await call(() => sb.auth.updateUser({ password: pw }));
     btn.disabled = false; btn.textContent = 'Update password';
     if (r.error) return toast(r.error.message);
     S.changePw = false;
@@ -383,7 +428,7 @@ function wireChangePw() {
     render();
   };
   btn.onclick = submit;
-  ['cpPw', 'cpPw2'].forEach(id => { el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
+  ['cpPw', 'cpPw2'].forEach(id => { if (el(id)) el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
 }
 
 /* ---------------- 1 · submit ---------------- */
