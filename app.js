@@ -65,6 +65,7 @@ const S = {
   mode: 'individual', ticketPref: 'collective', reqCategory: 'intercity',
   solo: blankTrav(), travForm: [], pocTravels: false,
   form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin', signupRole: 'requester',
+  recovery: false, changePw: false,
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
   coordType: 'intercity', travelType: 'intercity', memberDraft: {}, reportType: 'intercity',
 };
@@ -104,17 +105,21 @@ function travelDetail(p) {
 
 /* ---------------- boot & data ---------------- */
 async function boot() {
-  const { data: { session } } = await sb.auth.getSession();
-  S.session = session;
-  if (session) await loadAll();
-  render();
-  sb.auth.onAuthStateChange(async (_e, s) => {
+  // Registered before the initial getSession() call so the one-shot PASSWORD_RECOVERY
+  // event (fired while parsing the reset-link redirect) can't be missed on page load.
+  sb.auth.onAuthStateChange(async (e, s) => {
+    if (e === 'PASSWORD_RECOVERY') { S.session = s; S.recovery = true; render(); return; }
+    if (e === 'INITIAL_SESSION') return; // boot()'s own getSession() already handles first load
     const changed = (s?.user?.id) !== (S.session?.user?.id);
     S.session = s;
     if (!changed) return;
     if (s) await loadAll(); else S.profile = null;
     render();
   });
+  const { data: { session } } = await sb.auth.getSession();
+  S.session = session;
+  if (session) await loadAll();
+  render();
 }
 
 async function loadAll() {
@@ -154,6 +159,7 @@ async function refresh() {
 
 /* ---------------- shell ---------------- */
 function render() {
+  if (S.recovery) { el('app').innerHTML = recoveryView(); wireRecovery(); return; }
   if (!S.session) { el('app').innerHTML = authView(); wireAuth(); return; }
   const tabs = allowedTabs();
   const counts = {};
@@ -177,10 +183,13 @@ function render() {
           <b>${esc(S.profile?.full_name || S.profile?.email || '')}</b>
           <span>${esc(ROLE_LABEL[role()] || role())}${S.profile?.team ? ' · ' + esc(S.profile.team) : ''}</span>
         </div>
+        <button class="btn-out" onclick="toggleChangePw()">Change password</button>
         <button class="btn-out" onclick="signOut()">Sign out</button>
       </div>
     </div>
   </header>
+
+  ${S.changePw ? changePwPanel() : ''}
 
   <div class="ribbon">
     <div class="ribbon-inner">
@@ -218,20 +227,21 @@ function viewBody() {
 }
 
 window.goView = v => { S.view = v; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-window.signOut = async () => { await sb.auth.signOut(); S.profile = null; S.requests = []; S.beds = []; render(); };
+window.signOut = async () => { await sb.auth.signOut(); S.profile = null; S.requests = []; S.beds = []; S.changePw = false; render(); };
 
 /* ---------------- auth ---------------- */
 function authView() {
+  const reset = S.authMode === 'reset';
   return `<div class="auth-wrap">
     <div class="auth-head">
       <h2>MKN Travel &amp; Stay</h2>
       <p>Sadhguru Sannidhi, Bengaluru · consecration travel &amp; accommodation</p>
     </div>
     <div class="card pad">
-      <div class="auth-tabs">
+      ${reset ? '' : `<div class="auth-tabs">
         <button class="${S.authMode === 'signin' ? 'on' : ''}" onclick="setAuthMode('signin')">Sign in</button>
         <button class="${S.authMode === 'signup' ? 'on' : ''}" onclick="setAuthMode('signup')">Create account</button>
-      </div>
+      </div>`}
       ${S.authMode === 'signup' ? `<div class="field"><label>Full name</label><input id="auName" placeholder="Your name"></div>
       <div class="field">
         <label>Are you booking for yourself, or as a team POC?</label>
@@ -242,11 +252,14 @@ function authView() {
         <div class="hint">POCs can raise a request on behalf of a whole team, not just themselves.</div>
       </div>` : ''}
       <div class="field"><label>Email</label><input id="auEmail" type="email" placeholder="name@example.com"></div>
-      <div class="field"><label>Password</label><input id="auPw" type="password" placeholder="At least 6 characters"></div>
-      <button class="btn btn-primary" id="auGo" style="width:100%">${S.authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
-      <div class="hint" style="margin-top:12px">${S.authMode === 'signup'
+      ${reset ? '' : '<div class="field"><label>Password</label><input id="auPw" type="password" placeholder="At least 6 characters"></div>'}
+      ${reset ? '' : `<div style="text-align:right;margin:-9px 0 15px">
+        <button class="linklike" onclick="setAuthMode('reset')">Forgot password?</button>
+      </div>`}
+      <button class="btn btn-primary" id="auGo" style="width:100%">${reset ? 'Send reset link' : S.authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
+      ${reset ? `<div class="hint" style="margin-top:12px;text-align:center"><button class="linklike" onclick="setAuthMode('signin')">Back to sign in</button></div>` : `<div class="hint" style="margin-top:12px">${S.authMode === 'signup'
         ? 'Coordinator, travel desk and accommodation roles are assigned separately by an admin.'
-        : 'New accounts start as Requester (or Team POC, if chosen at sign-up). Coordinator, travel desk and accommodation roles are assigned by an admin.'}</div>
+        : 'New accounts start as Requester (or Team POC, if chosen at sign-up). Coordinator, travel desk and accommodation roles are assigned by an admin.'}</div>`}
     </div>
   </div>`;
 }
@@ -257,7 +270,17 @@ function wireAuth() {
   const btn = el('auGo');
   if (!btn) return;
   const submit = async () => {
-    const email = val('auEmail'), pw = val('auPw');
+    const email = val('auEmail');
+    if (S.authMode === 'reset') {
+      if (!email) return toast('Enter your email.');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      const r = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      btn.disabled = false; btn.textContent = 'Send reset link';
+      if (r.error) return toast(r.error.message);
+      S.authMode = 'signin'; render();
+      return toast('If that email has an account, a reset link is on its way.');
+    }
+    const pw = val('auPw');
     if (!email || !pw) return toast('Enter your email and password.');
     btn.disabled = true; btn.textContent = 'Please wait…';
     const r = S.authMode === 'signup'
@@ -270,6 +293,75 @@ function wireAuth() {
   };
   btn.onclick = submit;
   ['auEmail', 'auPw', 'auName'].forEach(id => { if (el(id)) el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
+}
+
+/* ---------------- password reset landing (from emailed link) ---------------- */
+function recoveryView() {
+  return `<div class="auth-wrap">
+    <div class="auth-head">
+      <h2>Set a new password</h2>
+      <p>You've followed a password reset link. Choose a new password to finish signing in.</p>
+    </div>
+    <div class="card pad">
+      <div class="field"><label>New password</label><input id="rcPw" type="password" placeholder="At least 6 characters"></div>
+      <div class="field"><label>Confirm new password</label><input id="rcPw2" type="password" placeholder="Re-enter password"></div>
+      <button class="btn btn-primary" id="rcGo" style="width:100%">Set new password</button>
+    </div>
+  </div>`;
+}
+
+function wireRecovery() {
+  const btn = el('rcGo');
+  if (!btn) return;
+  const submit = async () => {
+    const pw = val('rcPw'), pw2 = val('rcPw2');
+    if (!pw || pw.length < 6) return toast('Password must be at least 6 characters.');
+    if (pw !== pw2) return toast('Passwords do not match.');
+    btn.disabled = true; btn.textContent = 'Please wait…';
+    const r = await sb.auth.updateUser({ password: pw });
+    if (r.error) { btn.disabled = false; btn.textContent = 'Set new password'; return toast(r.error.message); }
+    S.recovery = false;
+    toast('Password updated — you\'re signed in.');
+    await loadAll(); render();
+  };
+  btn.onclick = submit;
+  ['rcPw', 'rcPw2'].forEach(id => { el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
+}
+
+/* ---------------- in-app change password (while signed in) ---------------- */
+window.toggleChangePw = () => { S.changePw = !S.changePw; render(); };
+
+function changePwPanel() {
+  return `<div class="auth-wrap" style="padding:16px 20px 0">
+    <div class="card pad">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <b>Change your password</b>
+        <button class="linklike" onclick="toggleChangePw()">Close</button>
+      </div>
+      <div class="field"><label>New password</label><input id="cpPw" type="password" placeholder="At least 6 characters"></div>
+      <div class="field"><label>Confirm new password</label><input id="cpPw2" type="password" placeholder="Re-enter password"></div>
+      <button class="btn btn-primary" id="cpGo">Update password</button>
+    </div>
+  </div>`;
+}
+
+function wireChangePw() {
+  const btn = el('cpGo');
+  if (!btn) return;
+  const submit = async () => {
+    const pw = val('cpPw'), pw2 = val('cpPw2');
+    if (!pw || pw.length < 6) return toast('Password must be at least 6 characters.');
+    if (pw !== pw2) return toast('Passwords do not match.');
+    btn.disabled = true; btn.textContent = 'Updating…';
+    const r = await sb.auth.updateUser({ password: pw });
+    btn.disabled = false; btn.textContent = 'Update password';
+    if (r.error) return toast(r.error.message);
+    S.changePw = false;
+    toast('Password updated.');
+    render();
+  };
+  btn.onclick = submit;
+  ['cpPw', 'cpPw2'].forEach(id => { el(id).onkeydown = e => { if (e.key === 'Enter') submit(); }; });
 }
 
 /* ---------------- 1 · submit ---------------- */
@@ -511,6 +603,7 @@ function captureCabForm() {
 }
 
 function wireView() {
+  wireChangePw();
   if (S.view !== 'submit') return;
 
   document.querySelectorAll('#travCards [data-f]').forEach(node => {
