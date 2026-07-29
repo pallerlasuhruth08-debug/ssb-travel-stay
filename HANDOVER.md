@@ -29,14 +29,24 @@ One request covers one or more travellers and moves through four stages, shown a
 **Submitted** → **Approved** → **Ticketed** → **Housed**
 
 A requester raises a request for themselves, or a POC raises one per team. It lands with the **coordinator**, who
-approves it or sends it back with a reason. Once approved it reaches the **travel desk**, which records a PNR per
-traveller (or one collective reference for the whole team) and attaches the booked ticket. It then reaches the
-**accommodation desk**, which allots each traveller a specific bed from the bed master and confirms. Unlike the
-previous build the two desks now run in sequence, not in parallel — a bed cannot be allotted before the ticket
-exists, which is what the tabs 1-2-3-4 represent.
+approves it or sends it back with a reason. Once approved, the **travel desk** and **accommodation desk** work in
+**parallel, not in sequence** — they're two separate teams and neither needs to wait for the other. The travel desk
+records a PNR per traveller (or one collective reference for the whole team) and attaches the booked ticket(s);
+since a team can mix travel modes (train for one person, flight for another, bus for a third), each traveller who
+needs a ticket gets their **own** file-upload slot, not one shared attachment for the whole request — the one
+exception is the "collective" ticket preference, where a single shared reference/file genuinely covers the whole
+group. The accommodation desk can start **pre-assigning beds the moment a request is approved** (`mkn_tr_set_bed`
+only requires status `approved`/`booked`/`complete`, not specifically `booked`) — it shows up in their "Awaiting
+bed" queue immediately, before ticketing is even underway. The final **"Allot beds & confirm"** action (which emails
+the requester the complete travel + stay details and moves the request to **Housed**) still requires the ticket to
+already be booked (`mkn_tr_complete` still requires status `= 'booked'`) — that gate is unchanged, since "Housed"
+is meant to mean both halves are settled, not stay alone. Until the ticket is booked, the accommodation desk sees a
+hint that beds can be pre-assigned now but final confirmation is still pending on the travel desk. The stepper
+(Submitted → Approved → Ticketed → Housed) still reflects the underlying `status` column, which is unchanged by any
+of this — only *when beds can be picked* moved earlier, not the status model itself.
 
 A traveller marked **Own arrangement** is skipped by the ticket check — they still need a bed, but the travel desk
-is not asked for a PNR.
+is not asked for a PNR or a ticket file.
 
 A request can also end in **Cancelled** — the requester's own call, any time before it's housed — alongside the
 existing **Rejected** (the coordinator's call). Both drop out of the stepper entirely, same as each other.
@@ -103,6 +113,11 @@ Three ways to deal with a lost/forgotten password, in order of preference:
    — matches the bcrypt cost factor (`$2a$06$`) Supabase's own hashes use. Only do this for an account you've
    confirmed the owner of; it bypasses email verification entirely.
 
+A successful submission now shows a **persistent confirmation banner** at the top of the Submit tab (request/team id,
+"Now with the coordinator…") instead of relying solely on the toast, which faded before some requesters were
+confident it had actually gone through. It stays until dismissed (`dismissSubmitted()`), and a POC's form resets
+underneath it so they can raise their next team right away without losing the confirmation.
+
 Everyone keeps the Submit tab — staff travel too — and the panel at the top of it now shows the *full* card for
 each request you raised (stepper, traveller table, PNR/bed once assigned), not just a status chip, so you can see
 exactly where it stands. From that same card, a requester can **cancel their own request** at any point before it's
@@ -127,13 +142,24 @@ sits a second one, **Intercity requests / Intracity cabs**, switching which pipe
 showing — the Travel Desk tab has the same second toggle. ("Edit details" is intercity-only for now; cab requests
 don't have an edit path, just approve/send-back and, later, re-open-to-correct-driver-details.)
 
+## Bed master — "Add beds"
+
+The **Add beds** form now offers a **dropdown of existing locations** (matching how "Remove beds" already worked),
+with a **"+ New location"** option that reveals a free-text field instead. Picking an existing location shows a
+hint with the highest bed number already there (e.g. "Last bed number here: 110"), so whoever's adding more beds
+doesn't have to cross-reference the table below to know where to continue numbering — this replaced a free-text
+location field that had no visibility into what already existed and risked silently creating a near-duplicate
+location from a typo.
+
 ## Data model
 
 `mkn_trip_requests` is the header: one row per request, carrying mode (`individual` / `poc`), team name, the
 contact block, travel date, plan, ticket preference and the status. `mkn_trip_travellers` is the line table: one
 row per person, carrying age, gender, category, ID, travel mode, the conditional travel detail, and — filled in
-later by the desks — `pnr`, `bed_id` and `bed_label`. `mkn_beds` is the bed master: one row per physical bed,
-unique on (location, bed), pointing at the traveller occupying it.
+later by the desks — `pnr`, `ticket_path`, `bed_id` and `bed_label`. `ticket_path` is per-traveller (added
+alongside the pre-existing per-request `mkn_trip_requests.ticket_path`, which is still what's used for the
+"collective" ticket preference — one shared file for the whole team). `mkn_beds` is the bed master: one row per
+physical bed, unique on (location, bed), pointing at the traveller occupying it.
 
 `mkn_cab_requests` is the entire intracity-cab pipeline in one table (no line table — one cab request is one
 booking, not a group of travellers): POC name/email/phone, date, time, `from_location` and `to_location` (each

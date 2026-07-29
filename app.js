@@ -49,7 +49,7 @@ const TABS = [
   { id: 'submit', label: '1 · Submit Request', roles: '*' },
   { id: 'coord',  label: '2 · Coordinator',    roles: ['coordinator', 'admin'], badge: 'submitted', cabBadge: 'submitted' },
   { id: 'travel', label: '3 · Travel Desk',    roles: ['travel_desk', 'admin'], badge: 'approved', cabBadge: 'approved' },
-  { id: 'accom',  label: '4 · Accommodation',  roles: ['accommodation_desk', 'admin'], badge: 'booked' },
+  { id: 'accom',  label: '4 · Accommodation',  roles: ['accommodation_desk', 'admin'], badge: ['approved', 'booked'] },
   { id: 'master', label: 'Bed Master',         roles: ['accommodation_desk', 'coordinator', 'admin'] },
   { id: 'people', label: 'People & Roles',     roles: ['admin'] },
   { id: 'report', label: 'Report',             roles: ['admin'] },
@@ -57,7 +57,7 @@ const TABS = [
 
 const TRAV_COLS = ['id', 'request_id', 'sort_order', 'name', 'age', 'gender', 'category',
   'id_number_masked', 'id_image_path', 'travel_mode', 'train_name', 'train_number',
-  'flight_name', 'flight_number', 'bus_name', 'pnr', 'bed_id', 'bed_label'].join(',');
+  'flight_name', 'flight_number', 'bus_name', 'pnr', 'ticket_path', 'bed_id', 'bed_label'].join(',');
 
 const S = {
   session: null, profile: null, view: 'submit',
@@ -68,7 +68,9 @@ const S = {
   recovery: false, changePw: false,
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
   coordType: 'intercity', travelType: 'intercity', memberDraft: {}, reportType: 'intercity',
+  addBedLoc: null,
 };
+const NEW_LOCATION = '__new__';
 
 /* ---------------- helpers ---------------- */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -165,7 +167,8 @@ function render() {
   const counts = {};
   tabs.forEach(t => {
     if (!t.badge) return;
-    let n = S.requests.filter(r => r.status === t.badge).length;
+    const wanted = Array.isArray(t.badge) ? t.badge : [t.badge];
+    let n = S.requests.filter(r => wanted.includes(r.status)).length;
     if (t.cabBadge) n += S.cabRequests.filter(c => c.status === t.cabBadge).length;
     counts[t.id] = n;
   });
@@ -381,6 +384,8 @@ function submitView() {
         : 'Raise a request for yourself, or as a POC on behalf of your team. Each traveller needs age, gender, category and an ID for ticket booking.'}</p>
     </div>
 
+    ${submittedBannerHTML()}
+
     ${mine.length ? `<div class="card pad" style="margin-bottom:18px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
         <div><h3 style="font-size:20px">Requests you've raised</h3>
@@ -401,6 +406,24 @@ function submitView() {
     </div>
   </div>`;
 }
+
+// A toast alone faded before anyone could confirm a submission actually went through --
+// this banner stays put (with the request/team id) until explicitly dismissed, and the
+// same "submit another" flow already resets the form underneath it.
+function submittedBannerHTML() {
+  if (!S.justSubmitted) return '';
+  const { label, detail } = S.justSubmitted;
+  return `<div class="card pad" style="margin-bottom:18px;border-color:var(--green);background:var(--green-bg)">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-weight:600;color:var(--green);font-size:15px">✓ ${esc(label)}</div>
+        <div class="hint" style="margin-top:2px">${esc(detail)}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="dismissSubmitted()">Got it</button>
+    </div>
+  </div>`;
+}
+window.dismissSubmitted = () => { S.justSubmitted = null; render(); };
 
 function intercityFormHTML() {
   const poc = S.mode === 'poc';
@@ -698,12 +721,12 @@ async function submitRequest() {
       S.form.team = ''; S.form.plan = '';
       S.travForm = [blankTrav()]; S.pocTravels = false;
       S.open.clear();
+      S.justSubmitted = { label: `"${team}" submitted as ${data}`, detail: 'Now with the coordinator for review. Raise another team below, or you\'re done for now.' };
       await refresh(); render();
-      toast(`"${team}" submitted as ${data}. Raise another team, or you're done.`);
     } else {
       S.form = {}; S.solo = blankTrav();
+      S.justSubmitted = { label: `Request ${data} submitted`, detail: 'Now with the coordinator for review — it\'ll show up in "Requests you\'ve raised" above as it moves through the pipeline.' };
       await refresh(); render();
-      toast(`Request ${data} submitted — now with the coordinator.`);
     }
   } catch (err) {
     S.busy = false; render();
@@ -733,8 +756,8 @@ async function submitCabRequest() {
 
     S.busy = false;
     S.cabForm = {};
+    S.justSubmitted = { label: `Cab request ${data} submitted`, detail: 'Now with the coordinator for review — it\'ll show up in "Requests you\'ve raised" above as it moves through the pipeline.' };
     await refresh(); render();
-    toast(`Cab request ${data} submitted — now with the coordinator.`);
   } catch (err) {
     S.busy = false; render();
     toast(err.message || String(err));
@@ -759,10 +782,14 @@ function statusChip(status) {
 }
 
 function peopleTable(r) {
+  const list = travellers(r);
+  const showPnr = r.status === 'booked' || r.status === 'complete';
+  const showTicket = list.some(p => p.ticket_path);
+  const showBed = list.some(p => p.bed_label);
   return `<div class="ptable-wrap"><table class="ptable">
     <thead><tr><th>Traveller</th><th>Age</th><th>Gender</th><th>Category</th><th>ID number</th>
-      <th>ID proof</th><th>Travel</th><th>Details</th>${r.status === 'booked' || r.status === 'complete' ? '<th>PNR</th>' : ''}${r.status === 'complete' ? '<th>Bed</th>' : ''}</tr></thead>
-    <tbody>${travellers(r).map(p => `<tr>
+      <th>ID proof</th><th>Travel</th><th>Details</th>${showPnr ? '<th>PNR</th>' : ''}${showTicket ? '<th>Ticket</th>' : ''}${showBed ? '<th>Bed</th>' : ''}</tr></thead>
+    <tbody>${list.map(p => `<tr>
       <td style="font-weight:600">${esc(p.name)}</td>
       <td>${esc(p.age ?? '—')}</td>
       <td>${esc(p.gender || '—')}</td>
@@ -771,8 +798,9 @@ function peopleTable(r) {
       <td>${isStaff() && p.id_image_path ? `<a href="#" onclick="viewFile(event,'mkn-ids','${esc(p.id_image_path)}')">view</a>` : (p.id_image_path ? 'Uploaded' : '—')}</td>
       <td>${esc(p.travel_mode || '—')}</td>
       <td>${esc(travelDetail(p) || '—')}</td>
-      ${r.status === 'booked' || r.status === 'complete' ? `<td>${esc(p.pnr || (needsTicket(p) ? '—' : 'own'))}</td>` : ''}
-      ${r.status === 'complete' ? `<td>${esc(p.bed_label || '—')}</td>` : ''}
+      ${showPnr ? `<td>${esc(p.pnr || (needsTicket(p) ? '—' : 'own'))}</td>` : ''}
+      ${showTicket ? `<td>${p.ticket_path ? `<a href="#" onclick="viewFile(event,'mkn-tickets','${esc(p.ticket_path)}')">view</a>` : '—'}</td>` : ''}
+      ${showBed ? `<td>${esc(p.bed_label || '—')}</td>` : ''}
     </tr>`).join('')}</tbody></table></div>`;
 }
 
@@ -1221,13 +1249,15 @@ function deskView(which) {
 
   const head = isTravel
     ? { t: 'Travel desk — book tickets', p: 'Approved requests await ticketing. Enter the PNR / ticket reference (or a collective reference), attach the booked ticket, then confirm to notify the requester and pass on for bed allotment.' }
-    : { t: 'Accommodation — allot beds', p: 'Ticketed travellers await a bed. Pick a free bed from the master for each person, then confirm to complete and notify.' };
-  const pendingStatus = isTravel ? 'approved' : 'booked';
+    // Accommodation no longer waits on ticketing -- beds can be pre-assigned as soon as a
+    // request is approved, fully independent of the travel desk's own queue.
+    : { t: 'Accommodation — allot beds', p: 'Approved and ticketed travellers can be housed. Pick a free bed from the master for each person as soon as the request is approved; the final confirm becomes available once the ticket is booked.' };
+  const pendingStatuses = isTravel ? ['approved'] : ['approved', 'booked'];
   const doneStatuses = isTravel ? ['booked', 'complete'] : ['complete'];
-  const items = S.requests.filter(r => done ? doneStatuses.includes(r.status) : r.status === pendingStatus);
+  const items = S.requests.filter(r => done ? doneStatuses.includes(r.status) : pendingStatuses.includes(r.status));
   const emptyMsg = done
     ? (isTravel ? 'No booked tickets yet.' : 'No housed travellers yet.')
-    : (isTravel ? 'No approved requests waiting for tickets.' : 'No ticketed travellers waiting for beds.');
+    : (isTravel ? 'No approved requests waiting for tickets.' : 'No approved requests waiting for a bed.');
   return `<div class="view active">
     <div class="view-head"><h2>${head.t}</h2><p>${head.p}</p></div>
     ${isTravel ? `<div class="seg" style="margin-bottom:10px">
@@ -1272,25 +1302,32 @@ window.bookCab = async id => {
 function travelInner(r) {
   const list = travellers(r);
   const collective = r.ticket_pref === 'collective';
+  const ticketDrop = id => `<div class="file-drop" style="margin-top:6px" onclick="pickTicket('${id}')" id="tktDrop-${id}">
+      <span>Attach booked ticket (PDF / image)</span></div>
+    <input type="file" accept="image/*,.pdf" hidden id="tktFile-${id}" onchange="ticketPicked('${id}')">`;
+
   const rows = collective
     ? `<div class="field" style="margin-bottom:0"><label>Collective ticket reference / PNR</label>
-        <input id="pnrAll-${r.id}" value="${esc(list.find(p => p.pnr)?.pnr || '')}" placeholder="e.g. PNR-XXXX for the group"></div>`
+        <input id="pnrAll-${r.id}" value="${esc(list.find(p => p.pnr)?.pnr || '')}" placeholder="e.g. PNR-XXXX for the group"></div>
+      ${ticketDrop(r.id)}`
+    // Each traveller can be on a different mode (train/flight/bus), so each needs its own
+    // ticket file slot -- one collective attachment can't cover a mixed-mode team.
     : list.map(p => `<div class="field" style="margin-bottom:8px">
         <label>${esc(p.name)} · ${esc(p.travel_mode || '—')}${travelDetail(p) ? ' · ' + esc(travelDetail(p)) : ''}</label>
         <input id="pnr-${p.id}" value="${esc(p.pnr || '')}" ${needsTicket(p) ? '' : 'disabled'}
-          placeholder="${needsTicket(p) ? 'PNR / ticket ref' : 'Own arrangement — no ticket needed'}"></div>`).join('');
+          placeholder="${needsTicket(p) ? 'PNR / ticket ref' : 'Own arrangement — no ticket needed'}">
+        ${needsTicket(p) ? ticketDrop(p.id) : ''}
+      </div>`).join('');
 
-  return `<div class="workbox"><label>Ticket booking</label>${rows}
-    <div class="file-drop" style="margin-top:8px" onclick="pickTicket('${r.id}')" id="tktDrop-${r.id}">
-      <span>Attach booked ticket (PDF / image)</span></div>
-    <input type="file" accept="image/*,.pdf" hidden id="tktFile-${r.id}" onchange="ticketPicked('${r.id}')">
-  </div>
+  return `<div class="workbox"><label>Ticket booking</label>${rows}</div>
   <div class="actions">
     <button class="btn btn-primary btn-sm" onclick="book('${r.id}',${collective})">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'} &amp; notify</button>
     <span class="hint">${r.status === 'approved' ? `Emails the ticket to ${esc(r.contact_email || 'the requester')} and passes on for bed allotment.` : 'Corrects the PNR / ticket already on file.'}</span>
   </div>`;
 }
 
+// Keyed by request id for the collective flow, or by traveller id for the individual
+// flow -- the two id spaces never collide (REQ-xxxx vs uuid), so one map covers both.
 const ticketFiles = {};
 window.pickTicket = id => el('tktFile-' + id)?.click();
 window.ticketPicked = id => {
@@ -1320,16 +1357,32 @@ window.book = async (id, collective) => {
   }
 
   let path = null;
-  const file = ticketFiles[id];
-  if (file) {
-    path = `tickets/${id}-${Date.now()}-${file.name.replace(/[^\w.\-]/g, '_')}`;
-    const up = await sb.storage.from('mkn-tickets').upload(path, file);
-    if (up.error) return toast(up.error.message);
+  const ticketPaths = {};
+  if (collective) {
+    const file = ticketFiles[id];
+    if (file) {
+      path = `tickets/${id}-${Date.now()}-${file.name.replace(/[^\w.\-]/g, '_')}`;
+      const up = await sb.storage.from('mkn-tickets').upload(path, file);
+      if (up.error) return toast(up.error.message);
+    }
+  } else {
+    for (const p of list) {
+      if (!needsTicket(p)) continue;
+      const file = ticketFiles[p.id];
+      if (!file) continue;
+      const tpath = `tickets/${id}-${p.id}-${Date.now()}-${file.name.replace(/[^\w.\-]/g, '_')}`;
+      const up = await sb.storage.from('mkn-tickets').upload(tpath, file);
+      if (up.error) return toast(up.error.message);
+      ticketPaths[p.id] = tpath;
+    }
   }
 
-  const { error } = await sb.rpc('mkn_tr_book', { p_request_id: id, p_pnrs: pnrs, p_ticket_path: path });
+  const { error } = await sb.rpc('mkn_tr_book', {
+    p_request_id: id, p_pnrs: pnrs,
+    p_ticket_path: path, p_ticket_paths: collective ? null : ticketPaths,
+  });
   if (error) return toast(error.message);
-  delete ticketFiles[id];
+  if (collective) delete ticketFiles[id]; else list.forEach(p => delete ticketFiles[p.id]);
   await refresh(); render();
   toast('Tickets booked ✓ Requester notified. Now awaiting bed.');
 };
@@ -1342,13 +1395,21 @@ function accomInner(r) {
       <label>${esc(p.name)} · ${esc(p.gender || '—')} · ${esc(p.category || '—')}</label>
       <select onchange="setBed('${p.id}',this.value)">${bedOptions(null)}</select></div>`;
   }).join('');
-  return `<div class="workbox"><label>Bed allotment at SSB</label>${rows}</div>
-  ${r.status === 'complete'
-    ? `<div class="hint" style="margin-top:10px">All travellers housed. Use "Change" above to reassign a bed if needed.</div>`
-    : `<div class="actions">
+  // Beds can be pre-assigned as soon as the request is approved, but the final
+  // confirm-and-notify step still needs the travel desk to have booked the ticket first --
+  // "Housed" is meant to mean travel AND stay are both settled, not stay alone.
+  let action;
+  if (r.status === 'complete') {
+    action = `<div class="hint" style="margin-top:10px">All travellers housed. Use "Change" above to reassign a bed if needed.</div>`;
+  } else if (r.status === 'approved') {
+    action = `<div class="hint" style="margin-top:10px">Beds can be pre-assigned now. Final confirmation unlocks once the travel desk books the ticket.</div>`;
+  } else {
+    action = `<div class="actions">
         <button class="btn btn-primary btn-sm" onclick="completeReq('${r.id}')">Allot beds &amp; confirm</button>
         <span class="hint">Sends final stay details to ${esc(r.contact_email || 'the requester')}.</span>
-      </div>`}`;
+      </div>`;
+  }
+  return `<div class="workbox"><label>Bed allotment at SSB</label>${rows}</div>${action}`;
 }
 
 function bedOptions(selected) {
@@ -1388,6 +1449,12 @@ function masterView() {
   const byLoc = {};
   S.beds.forEach(b => (byLoc[b.location] = byLoc[b.location] || []).push(b));
   const locs = Object.keys(byLoc).sort();
+  const addLoc = S.addBedLoc && (locs.includes(S.addBedLoc) || S.addBedLoc === NEW_LOCATION)
+    ? S.addBedLoc : (locs[0] || NEW_LOCATION);
+  const lastBedNumber = loc => {
+    const nums = (byLoc[loc] || []).map(b => parseInt(b.bed, 10)).filter(n => !isNaN(n));
+    return nums.length ? Math.max(...nums) : null;
+  };
   const rows = locs.map(loc => {
     const beds = byLoc[loc], total = beds.length;
     const taken = beds.filter(b => b.traveller_id).length;
@@ -1403,7 +1470,15 @@ function masterView() {
     ${canEdit ? `<div class="card pad" style="margin-bottom:22px">
       <label>Add beds to a location</label>
       <div class="alloc-row">
-        <div class="field"><label>Location / block</label><input id="acLoc" placeholder="e.g. Anna Block A"></div>
+        <div class="field"><label>Location / block</label>
+          <select id="acLocSel" onchange="setAddBedLoc(this.value)">
+            ${locs.map(l => `<option value="${esc(l)}" ${l === addLoc ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+            <option value="${NEW_LOCATION}" ${addLoc === NEW_LOCATION ? 'selected' : ''}>+ New location</option>
+          </select>
+          ${addLoc === NEW_LOCATION
+            ? `<input id="acLocNew" placeholder="e.g. Anna Block A" style="margin-top:8px">`
+            : `<div class="hint">${lastBedNumber(addLoc) != null ? `Last bed number here: ${esc(lastBedNumber(addLoc))}` : 'No beds yet at this location.'}</div>`}
+        </div>
         <div class="field"><label>Bed numbers</label><input id="acBeds" placeholder="e.g. 101-110  or  1,2,3">
           <div class="hint">Range (101-110) or comma list (1,2,3).</div></div>
         <div class="field btn-field"><label>Add</label><button class="btn btn-primary" onclick="addBeds()">Add beds</button></div>
@@ -1441,13 +1516,18 @@ function parseBedNumbers(raw) {
   return raw.split(',').map(x => x.trim()).filter(Boolean);
 }
 
+window.setAddBedLoc = v => { S.addBedLoc = v; render(); };
+
 window.addBeds = async () => {
-  const loc = val('acLoc'), raw = val('acBeds');
+  const usingNew = (S.addBedLoc || NEW_LOCATION) === NEW_LOCATION;
+  const loc = usingNew ? val('acLocNew') : (S.addBedLoc || '');
+  const raw = val('acBeds');
   if (!loc || !raw) return toast('Enter a location and bed numbers.');
   const beds = parseBedNumbers(raw);
   if (!beds.length) return toast('Enter at least one bed number.');
   const { data, error } = await sb.rpc('mkn_tr_add_beds', { p_location: loc, p_beds: beds });
   if (error) return toast(error.message);
+  S.addBedLoc = loc;
   await refresh(); render();
   toast(`Added ${data} bed(s) to ${loc}.` + (data < beds.length ? ' Duplicates were skipped.' : ''));
 };
