@@ -114,9 +114,21 @@ Three ways to deal with a lost/forgotten password, in order of preference:
    confirmed the owner of; it bypasses email verification entirely.
 
 A successful submission now shows a **persistent confirmation banner** at the top of the Submit tab (request/team id,
-"Now with the coordinator…") instead of relying solely on the toast, which faded before some requesters were
-confident it had actually gone through. It stays until dismissed (`dismissSubmitted()`), and a POC's form resets
-underneath it so they can raise their next team right away without losing the confirmation.
+"…awaiting coordinator approval" stated outright in the headline) instead of relying solely on the toast, which
+faded before some requesters were confident it had actually gone through and didn't say "approval" explicitly. It
+stays until dismissed (`dismissSubmitted()`), and applies the same way whether it's an individual's own request or
+a POC's whole team — a POC's form resets underneath it so they can raise their next team right away without losing
+the confirmation.
+
+A POC can also **bulk-upload ID photos** for a team instead of attaching each one on its own traveller card: "Bulk
+upload photos" opens a multi-file picker, and every selected file is staged in an **explicit assignment list** — a
+filename next to a "choose traveller" dropdown per photo — rather than being auto-matched to traveller cards by
+selection order. Order-based auto-matching was deliberately ruled out: a POC re-ordering files in the OS file picker
+(easy to do by accident with several people's Aadhaar/passport photos) would silently attach the wrong photo to the
+wrong person's ID record, which is exactly the kind of mistake this step exists to prevent. Assigning a photo moves
+it off the staging list and onto that traveller's own card (same `t.file` the per-traveller upload already used),
+so it's uploaded exactly like a manually-attached photo at submit time — nothing new happens at the upload/storage
+layer, this only changes how the file gets attached to the right traveller in the first place.
 
 Everyone keeps the Submit tab — staff travel too — and the panel at the top of it now shows the *full* card for
 each request you raised (stepper, traveller table, PNR/bed once assigned), not just a status chip, so you can see

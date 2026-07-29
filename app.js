@@ -63,7 +63,7 @@ const S = {
   session: null, profile: null, view: 'submit',
   requests: [], beds: [], people: [], cabRequests: [],
   mode: 'individual', ticketPref: 'collective', reqCategory: 'intercity',
-  solo: blankTrav(), travForm: [], pocTravels: false,
+  solo: blankTrav(), travForm: [], pocTravels: false, bulkPhotos: [],
   form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin', signupRole: 'requester',
   recovery: false, changePw: false,
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
@@ -477,6 +477,11 @@ function intercityFormHTML() {
         <label style="margin-bottom:2px">${poc ? 'Team members' : 'Your details'}</label>
         <div class="hint">${poc ? 'Add every traveller. Each needs age, gender, category and ID.' : 'Age, gender, category and ID are needed to book the ticket.'}</div>
       </div>
+      ${poc ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-ghost btn-sm" onclick="pickBulkPhotos()">📎 Bulk upload photos</button>
+        <input type="file" accept="image/*,.pdf" multiple hidden id="bulkPhotoInput" onchange="bulkPhotosPicked()">
+      </div>
+      ${bulkAssignPanelHTML()}` : ''}
       <div id="travCards">${poc
         ? S.travForm.map((t, i) => travCardHTML(i, t, false)).join('')
         : travCardHTML(-1, S.solo, true)}</div>
@@ -604,8 +609,48 @@ window.removeTrav = i => {
 window.pickFile = i => el('travFile' + i)?.click();
 window.resetForm = () => {
   S.form = {}; S.solo = blankTrav(); S.travForm = S.mode === 'poc' ? [blankTrav()] : [];
-  S.pocTravels = false; render(); toast('Form cleared.');
+  S.pocTravels = false; S.bulkPhotos = []; render(); toast('Form cleared.');
 };
+
+// Bulk ID-photo upload for a POC's team: photos are staged here and must be explicitly
+// assigned to a traveller one at a time -- never auto-matched by selection order, since a
+// wrong photo landing on the wrong person's ID record is a real verification risk.
+window.pickBulkPhotos = () => el('bulkPhotoInput')?.click();
+window.bulkPhotosPicked = () => {
+  const input = el('bulkPhotoInput');
+  const files = Array.from(input?.files || []);
+  if (!files.length) return;
+  S.bulkPhotos = (S.bulkPhotos || []).concat(files);
+  input.value = '';
+  render();
+};
+window.assignBulkPhoto = (photoIdx, travellerIdxStr) => {
+  if (travellerIdxStr === '') return;
+  const i = +travellerIdxStr;
+  const file = S.bulkPhotos[photoIdx];
+  if (!file || !S.travForm[i]) return;
+  S.travForm[i].file = file;
+  S.bulkPhotos.splice(photoIdx, 1);
+  render();
+};
+window.cancelBulkPhotos = () => { S.bulkPhotos = []; render(); };
+
+function bulkAssignPanelHTML() {
+  if (!S.bulkPhotos || !S.bulkPhotos.length) return '';
+  const options = S.travForm.map((t, i) => `<option value="${i}">${esc(t.name.trim() || `Member ${i + 1}`)}</option>`).join('');
+  return `<div class="card pad" style="margin:12px 0;background:var(--band)">
+    <label style="margin-bottom:8px">Assign each uploaded photo to a team member</label>
+    ${S.bulkPhotos.map((f, idx) => `<div class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span style="flex:1;font-size:13px;overflow-wrap:anywhere">📎 ${esc(f.name)}</span>
+      <select style="width:auto;min-width:160px" onchange="assignBulkPhoto(${idx},this.value)">
+        <option value="">— choose traveller —</option>
+        ${options}
+      </select>
+    </div>`).join('')}
+    <div class="hint">Assigning a photo removes it from this list and attaches it to that member's card above. Anything left here when you submit stays unattached.</div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:6px" onclick="cancelBulkPhotos()">Clear remaining</button>
+  </div>`;
+}
 
 function captureForm() {
   if (S.view !== 'submit') return;
@@ -719,7 +764,7 @@ async function submitRequest() {
     if (poc) {
       // Keep the POC's own details so they can raise the next team straight away.
       S.form.team = ''; S.form.plan = '';
-      S.travForm = [blankTrav()]; S.pocTravels = false;
+      S.travForm = [blankTrav()]; S.pocTravels = false; S.bulkPhotos = [];
       S.open.clear();
       S.justSubmitted = { label: `"${team}" submitted as ${data} — awaiting coordinator approval`, detail: 'Raise another team below, or you\'re done for now.' };
       await refresh(); render();
