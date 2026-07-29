@@ -1,19 +1,33 @@
 # MKN Transport & Stay — SSB Bengaluru
 
-**Live app:** https://ssb-travel-stay.vercel.app
+**Live app:** https://pallerlasuhruth08-debug.github.io/ssb-travel-stay/ (primary, GitHub Pages) and
+https://ssb-travel-stay.vercel.app (kept in sync, Vercel)
 
-A static front end on Vercel talking to a Postgres database on Supabase. Rebuilt 27 Jul 2026 to the tabbed
-*Submit → Coordinator → Travel desk → Accommodation* structure, replacing the earlier sidebar build. The Submit,
-Coordinator and Travel Desk tabs now each carry **two request categories** — see "Two request categories" below.
+A static front end talking to a Postgres database on Supabase, deployed to both GitHub Pages and Vercel. Rebuilt
+27 Jul 2026 to the tabbed *Submit → Coordinator → Travel desk → Accommodation* structure, replacing the earlier
+sidebar build. The Submit, Coordinator and Travel Desk tabs now each carry **two request categories** — see "Two
+request categories" below.
 
 ## Stack and where everything lives
 
-The front end is two files — `index.html` (markup plus all styling) and `app.js` (all behaviour) — deployed to
-Vercel as static assets. There is no build step and no framework, so editing either file and redeploying is the
-whole change cycle. The back end is a Supabase project named **hasirushaale** (project ref
-`zbqetpvgipgagmmyupcn`, region ap-south-1 / Mumbai). Every table, function and storage bucket for this system
-is prefixed `mkn_` or `mkn-`, so it sits alongside the unrelated `hs_*` tables without touching them. Only the
-publishable (anon) key is embedded in the front end; every privileged operation goes through a database function.
+The front end is `index.html` (markup plus all styling), `app.js` (all behaviour) and `vendor/supabase.js` (the
+Supabase JS client, vendored — see "Vendored dependency" below) — deployed as static assets to GitHub Pages (auto,
+via `.github/workflows/pages.yml` on every push to `main`) and to Vercel (manual redeploy). There is no build step
+and no framework, so editing a file and redeploying is the whole change cycle. The back end is a Supabase project
+named **hasirushaale** (project ref `zbqetpvgipgagmmyupcn`, region ap-south-1 / Mumbai). Every table, function and
+storage bucket for this system is prefixed `mkn_` or `mkn-`, so it sits alongside the unrelated `hs_*` tables
+without touching them. Only the publishable (anon) key is embedded in the front end; every privileged operation
+goes through a database function.
+
+## Vendored dependency
+
+`vendor/supabase.js` (+ `vendor/591.supabase.js`, a lazy-loaded webpack chunk) is the official
+`@supabase/supabase-js@2.45.4` UMD build, committed as-is from the npm tarball. It used to be loaded from
+`cdn.jsdelivr.net` — that was a real bug: if the CDN script failed for any reason (slow connection, ad-blocker,
+CDN hiccup, firewall), `window.supabase` stayed `undefined` and the very first line of `app.js` threw an uncaught
+error, silently freezing the page on the "Loading…" placeholder forever with no visible error — reproduced
+identically on both GitHub Pages and Vercel. `app.js` now also checks `window.supabase` before use and shows a
+clear error message instead of hanging silently, as a safety net for the vendored file itself ever failing to load.
 
 ## Two request categories
 
@@ -301,5 +315,7 @@ project first, which requires a paid plan because the free tier caps at two proj
 
 ## Redeploying after an edit
 
-Edit `index.html` or `app.js`, then deploy the folder to the existing `ssb-travel-stay` Vercel project. Because
-there is no build step, what you upload is exactly what runs.
+Edit `index.html`, `app.js`, or (rarely) `vendor/supabase.js`, then push to `main` — GitHub Pages redeploys
+automatically via the Actions workflow — and separately redeploy the same files to the existing `ssb-travel-stay`
+Vercel project. Because there is no build step, what you upload is exactly what runs; always ship `index.html`,
+`app.js` and `vendor/supabase.js` together, even for a single-file change, to avoid a mismatched set.

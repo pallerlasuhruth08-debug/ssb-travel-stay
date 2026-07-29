@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 MKN Transport & Stay — a travel/stay/cab request-tracking tool for SSB Bengaluru (Mahakshetra Nirmana consecration
-event). A static front end (`index.html` + `app.js`) deployed to Vercel, talking to a Postgres database on
-Supabase. There is no build step, no framework, and no package.json — editing either file and redeploying is the
-entire change cycle.
+event). A static front end (`index.html` + `app.js`) deployed to both GitHub Pages and Vercel, talking to a
+Postgres database on Supabase. There is no build step, no framework, and no package.json — editing either file and
+redeploying is the entire change cycle.
 
 **Read `HANDOVER.md` first.** It is the authoritative, detailed reference for the data model, roles, security
 model, and known gaps — this file only orients you to the codebase shape and points you at what to read.
@@ -21,9 +21,10 @@ model, and known gaps — this file only orients you to the codebase shape and p
   same project without touching it. Only the publishable (anon) key is embedded in the front end
   (`SUPABASE_URL`/`SUPABASE_KEY` constants at the top of `app.js`); every privileged write goes through a
   `SECURITY DEFINER` Postgres function, never a raw table insert/update.
-- **Deployment**: Vercel project `ssb-travel-stay`. Deploying means uploading `index.html` and `app.js` — always
-  both together, since a partial deploy (one file only) breaks the app. There is no CI; the live app is at
-  `https://ssb-travel-stay.vercel.app`.
+- **Deployment**: two hosts kept in sync — GitHub Pages (auto-deploys `main` via `.github/workflows/pages.yml`, at
+  `https://pallerlasuhruth08-debug.github.io/ssb-travel-stay/`) and a Vercel project `ssb-travel-stay` (manual
+  redeploy, at `https://ssb-travel-stay.vercel.app`). Deploying means uploading `index.html`, `app.js` and
+  `vendor/supabase.js` together — a partial deploy (missing any one file) breaks the app.
 
 ## Working with the Supabase backend
 
@@ -87,15 +88,34 @@ ad hoc, throwaway approaches (not checked in):
 1. A jsdom + `vm` harness that stubs `window.supabase` and requires `app.js` in a sandboxed context, asserting on
    the rendered HTML string and on the `rpc()` calls a simulated click produces.
 2. Playwright driving the real `index.html`/`app.js` served locally via `http-server`, with `page.route()`
-   intercepting the Supabase CDN script tag to inject the same kind of stub client — used for real-DOM checks
-   (e.g. `document.documentElement.scrollWidth` vs `clientWidth` to catch mobile layout overflow) that a string
-   assertion can't catch.
+   intercepting the `vendor/supabase.js` script tag to inject the same kind of stub client — used for real-DOM
+   checks (e.g. `document.documentElement.scrollWidth` vs `clientWidth` to catch mobile layout overflow) that a
+   string assertion can't catch.
 
-Either approach works because the app has exactly one external dependency (`window.supabase`, loaded from a CDN
-`<script>` tag in `index.html`) — stub that one object and the whole app runs headless.
+Either approach works because the app has exactly one external dependency (`window.supabase`) — stub that one
+object and the whole app runs headless. That dependency is now vendored (`vendor/supabase.js`, plus its
+`vendor/591.supabase.js` webpack chunk), not loaded from a third-party CDN — see "Vendored dependency" below for why.
+
+## Vendored dependency
+
+`vendor/supabase.js` (+ `vendor/591.supabase.js`, its one lazy-loaded webpack chunk) is the official
+`@supabase/supabase-js@2.45.4` UMD build, committed verbatim from the npm tarball — it used to be loaded from
+`cdn.jsdelivr.net` instead. That CDN script tag was a real production bug: if it failed to load for any reason (a
+slow connection, an ad-blocker, a CDN hiccup, a corporate firewall), `window.supabase` stayed `undefined` and the
+very first executable line of `app.js` (`window.supabase.createClient(...)`) threw an uncaught `TypeError`, silently
+halting the entire script — leaving the page frozen on the static "Loading…" placeholder in `index.html` forever,
+with no visible error. This reproduced identically on both GitHub Pages and Vercel once diagnosed with a real
+(non-stubbed) Playwright run against a sandbox that blocks the CDN host, which is what confirmed the root cause.
+Vendoring removes the third-party-reachability dependency entirely; `app.js` also now checks `window.supabase`
+before use and replaces `#app` with a clear "couldn't load a required script" message instead of throwing silently,
+as a safety net in case the vendored file itself ever fails to load (e.g. a bad browser cache after a redeploy).
+To update the pinned version: `npm pack @supabase/supabase-js@<version>`, extract it, and copy
+`package/dist/umd/supabase.js` and `package/dist/umd/*.supabase.js` (any numbered chunk files) into `vendor/` as-is
+— no build step, no modification.
 
 ## Redeploying
 
-Deploy the two files verbatim to the existing Vercel project — there is no build step, so what's uploaded is
-exactly what runs. Always deploy `index.html` and `app.js` together, even for a single-file change, to avoid
-shipping a mismatched pair.
+Deploy the files verbatim to both hosts — there is no build step, so what's uploaded is exactly what runs. Always
+deploy `index.html`, `app.js` and `vendor/supabase.js` (+ its chunk file) together, even for a single-file change,
+to avoid shipping a mismatched set. GitHub Pages redeploys automatically on every push to `main`; Vercel needs a
+manual redeploy.
