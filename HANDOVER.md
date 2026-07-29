@@ -78,6 +78,31 @@ trigger only ever assigns `poc` or `requester` off that metadata field — a tam
 | Accommodation Desk | Submit, Accommodation, Bed Master (editable) |
 | Admin | all seven, including People & Roles and Report |
 
+## Password reset
+
+There's no "admin password" and no way for anyone — including Claude Code sessions with live DB access — to read
+back or guess an existing password; Supabase only ever stores a bcrypt hash (`auth.users.encrypted_password`).
+Three ways to deal with a lost/forgotten password, in order of preference:
+
+1. **"Forgot password?"** on the sign-in screen (`setAuthMode('reset')`) calls
+   `sb.auth.resetPasswordForEmail(email, { redirectTo: <same deployed URL> })`. Supabase emails a link that redirects
+   back into the app with recovery tokens in the URL fragment; `supabase-js` detects that automatically and fires an
+   `onAuthStateChange` event of type `PASSWORD_RECOVERY`. `app.js` listens for that (the listener is registered
+   *before* the initial `getSession()` call in `boot()`, since it's a one-shot event emitted while the client parses
+   the redirect URL — registering it any later can miss it) and sets `S.recovery = true`, which makes `render()` show
+   a dedicated "Set a new password" screen (`recoveryView()`/`wireRecovery()`) instead of the normal app, calling
+   `sb.auth.updateUser({ password })` to finish. **This depends on Supabase's built-in email sending, which on the
+   free tier has a low rate limit and can silently fail to arrive** — if a bunch of accounts were created in a short
+   window, reset emails may not go out at all.
+2. **"Change password"** button in the header, visible to anyone already signed in (`toggleChangePw()` /
+   `changePwPanel()`/`wireChangePw()`) — same `sb.auth.updateUser({ password })` call, no email involved. Use this
+   for "I know my current password but want to change it" rather than "I'm locked out."
+3. **Direct DB reset** (last resort, needs live Supabase access): `auth.users.encrypted_password` can be set directly
+   via `pgcrypto` (installed in the `extensions` schema), e.g.
+   `update auth.users set encrypted_password = extensions.crypt('<new password>', extensions.gen_salt('bf', 6)) where email = '<email>';`
+   — matches the bcrypt cost factor (`$2a$06$`) Supabase's own hashes use. Only do this for an account you've
+   confirmed the owner of; it bypasses email verification entirely.
+
 Everyone keeps the Submit tab — staff travel too — and the panel at the top of it now shows the *full* card for
 each request you raised (stepper, traveller table, PNR/bed once assigned), not just a status chip, so you can see
 exactly where it stands. From that same card, a requester can **cancel their own request** at any point before it's
