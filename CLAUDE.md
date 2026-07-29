@@ -21,10 +21,10 @@ model, and known gaps — this file only orients you to the codebase shape and p
   same project without touching it. Only the publishable (anon) key is embedded in the front end
   (`SUPABASE_URL`/`SUPABASE_KEY` constants at the top of `app.js`); every privileged write goes through a
   `SECURITY DEFINER` Postgres function, never a raw table insert/update.
-- **Deployment**: two hosts kept in sync — GitHub Pages (auto-deploys `main` via `.github/workflows/pages.yml`, at
-  `https://pallerlasuhruth08-debug.github.io/ssb-travel-stay/`) and a Vercel project `ssb-travel-stay` (manual
-  redeploy, at `https://ssb-travel-stay.vercel.app`). Deploying means uploading `index.html`, `app.js` and
-  `vendor/supabase.js` together — a partial deploy (missing any one file) breaks the app.
+- **Deployment**: two hosts kept in sync, both auto-deploying `main` — GitHub Pages (via
+  `.github/workflows/pages.yml`, at `https://pallerlasuhruth08-debug.github.io/ssb-travel-stay/`) and a Vercel
+  project `ssb-travel-stay` (via a direct Git integration, at `https://ssb-travel-stay.vercel.app`). Deploying is
+  just `git push` — there's no separate upload step for either host anymore.
 
 ## Working with the Supabase backend
 
@@ -115,7 +115,15 @@ To update the pinned version: `npm pack @supabase/supabase-js@<version>`, extrac
 
 ## Redeploying
 
-Deploy the files verbatim to both hosts — there is no build step, so what's uploaded is exactly what runs. Always
-deploy `index.html`, `app.js` and `vendor/supabase.js` (+ its chunk file) together, even for a single-file change,
-to avoid shipping a mismatched set. GitHub Pages redeploys automatically on every push to `main`; Vercel needs a
-manual redeploy.
+Both hosts now redeploy automatically on every push to `main` — GitHub Pages via
+`.github/workflows/pages.yml`, Vercel via a direct Git integration (Project Settings → Git,
+connected 29 Jul 2026). Deploying via `git push` is now the only path; there is no build step, so
+what's committed is exactly what runs. This replaced deploying to Vercel by pasting file content
+through an API tool call, which had started silently failing to transfer `vendor/supabase.js`
+(110KB — too large to reliably retype into a tool call without corruption) and left it 404ing in
+production. If a Vercel deploy is ever needed outside the normal push-to-`main` flow, push an empty
+commit (`git commit --allow-empty`) rather than reaching for the content-inlining tool again.
+
+`vercel.json` rewrites bare `/` to `/index.html` — without it Vercel 404s on the root URL for a
+static site with no detected framework (individual files like `/app.js` and `/vendor/supabase.js`
+are served fine either way, since Vercel checks the filesystem before applying rewrites).

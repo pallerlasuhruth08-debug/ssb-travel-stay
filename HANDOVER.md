@@ -12,8 +12,9 @@ request categories" below.
 
 The front end is `index.html` (markup plus all styling), `app.js` (all behaviour) and `vendor/supabase.js` (the
 Supabase JS client, vendored — see "Vendored dependency" below) — deployed as static assets to GitHub Pages (auto,
-via `.github/workflows/pages.yml` on every push to `main`) and to Vercel (manual redeploy). There is no build step
-and no framework, so editing a file and redeploying is the whole change cycle. The back end is a Supabase project
+via `.github/workflows/pages.yml`) and to Vercel (auto, via a direct Git integration set up 29 Jul 2026). Both hosts
+now redeploy automatically on every push to `main`; there's no build step and no framework, so `git push` is the
+whole change cycle — deploying is no longer a separate action from committing. The back end is a Supabase project
 named **hasirushaale** (project ref `zbqetpvgipgagmmyupcn`, region ap-south-1 / Mumbai). Every table, function and
 storage bucket for this system is prefixed `mkn_` or `mkn-`, so it sits alongside the unrelated `hs_*` tables
 without touching them. Only the publishable (anon) key is embedded in the front end; every privileged operation
@@ -315,7 +316,9 @@ project first, which requires a paid plan because the free tier caps at two proj
 
 ## Redeploying after an edit
 
-Edit `index.html`, `app.js`, or (rarely) `vendor/supabase.js`, then push to `main` — GitHub Pages redeploys
-automatically via the Actions workflow — and separately redeploy the same files to the existing `ssb-travel-stay`
-Vercel project. Because there is no build step, what you upload is exactly what runs; always ship `index.html`,
-`app.js` and `vendor/supabase.js` together, even for a single-file change, to avoid a mismatched set.
+Edit `index.html`, `app.js`, or (rarely) `vendor/supabase.js`, then push to `main` — both GitHub Pages and Vercel
+redeploy automatically (Pages via the Actions workflow, Vercel via its Git integration). There is no separate
+upload step for either host anymore. Because there is no build step, what's committed is exactly what runs.
+`vercel.json` rewrites bare `/` to `/index.html`, since Vercel doesn't do that automatically for a static site with
+no detected framework — don't remove it, the root URL 404s without it even though `/index.html` and other files
+resolve fine on their own.
