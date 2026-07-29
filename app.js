@@ -721,11 +721,11 @@ async function submitRequest() {
       S.form.team = ''; S.form.plan = '';
       S.travForm = [blankTrav()]; S.pocTravels = false;
       S.open.clear();
-      S.justSubmitted = { label: `"${team}" submitted as ${data}`, detail: 'Now with the coordinator for review. Raise another team below, or you\'re done for now.' };
+      S.justSubmitted = { label: `"${team}" submitted as ${data} — awaiting coordinator approval`, detail: 'Raise another team below, or you\'re done for now.' };
       await refresh(); render();
     } else {
       S.form = {}; S.solo = blankTrav();
-      S.justSubmitted = { label: `Request ${data} submitted`, detail: 'Now with the coordinator for review — it\'ll show up in "Requests you\'ve raised" above as it moves through the pipeline.' };
+      S.justSubmitted = { label: `Request ${data} submitted — awaiting coordinator approval`, detail: 'You\'ll see it in "Requests you\'ve raised" above as it moves through the pipeline.' };
       await refresh(); render();
     }
   } catch (err) {
@@ -756,7 +756,7 @@ async function submitCabRequest() {
 
     S.busy = false;
     S.cabForm = {};
-    S.justSubmitted = { label: `Cab request ${data} submitted`, detail: 'Now with the coordinator for review — it\'ll show up in "Requests you\'ve raised" above as it moves through the pipeline.' };
+    S.justSubmitted = { label: `Cab request ${data} submitted — awaiting coordinator approval`, detail: 'You\'ll see it in "Requests you\'ve raised" above as it moves through the pipeline.' };
     await refresh(); render();
   } catch (err) {
     S.busy = false; render();
