@@ -160,6 +160,21 @@ Related: a request that is *accepted and never answered* leaves its promise pend
 `signOut()` — that takes the very lock that may be stuck (see below), and the stored token is
 probably fine anyway.
 
+### A focused screen replaces the page, it does not stack on it
+
+**Change password** and the **post-submit confirmation** each used to render with the whole Submit
+tab still underneath — ribbon, tabs, "Requests you've raised" and a freshly reset new-request form.
+That read as a half-open overlay on a still-live page (the tabs behind it stayed clickable), and
+after submitting it was genuinely ambiguous whether the request had gone through or was still
+waiting to be filled in.
+
+Both are now the only thing on screen. `render()` returns early for `S.changePw` with just the
+header plus the panel; `submitView()` omits the new-request form entirely while `S.justSubmitted` is
+set. The header stays either way so the user keeps their identity and a way out, and the
+confirmation's **"Raise another request"** brings the form straight back — a POC entering several
+teams is still one click from the next. If you add another full-screen panel, follow the same shape
+rather than appending it above the view body.
+
 ### Never await a query inside an onAuthStateChange callback
 
 `supabase-js` invokes `onAuthStateChange` callbacks **while holding its auth lock**, and awaits the

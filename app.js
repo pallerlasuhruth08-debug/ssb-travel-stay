@@ -333,7 +333,7 @@ function render() {
     counts[t.id] = n;
   });
 
-  el('app').innerHTML = `
+  const headerHTML = `
   <header>
     <div class="head-inner">
       <div>
@@ -350,10 +350,18 @@ function render() {
         <button class="btn-out" onclick="signOut()">Sign out</button>
       </div>
     </div>
-  </header>
+  </header>`;
 
-  ${S.changePw ? changePwPanel() : ''}
+  // Changing your password is its own screen, not a panel stacked on top of a live page. Rendering
+  // the ribbon, tabs and request list underneath made it look like a half-open overlay, and left
+  // the tabs clickable behind it. The header stays so you keep your identity and a way out.
+  if (S.changePw) {
+    el('app').innerHTML = headerHTML + changePwPanel();
+    wireChangePw();
+    return;
+  }
 
+  el('app').innerHTML = headerHTML + `
   <div class="ribbon">
     <div class="ribbon-inner">
       <span class="step"><span class="num">1</span>Requester submits</span><span class="arr">→</span>
@@ -588,7 +596,7 @@ function submitView() {
       ${mine.map(m => m.cab ? cabCard(m.r, myCabSubmitInner(m.r)) : reqCard(m.r, mySubmitInner(m.r))).join('')}
     </div>` : ''}
 
-    <div class="card pad">
+    ${S.justSubmitted ? '' : `<div class="card pad">
       <div class="field">
         <label>What kind of request is this?</label>
         <div class="seg">
@@ -597,13 +605,17 @@ function submitView() {
         </div>
       </div>
       ${cab ? cabFormHTML() : intercityFormHTML()}
-    </div>
+    </div>`}
   </div>`;
 }
 
 // A toast alone faded before anyone could confirm a submission actually went through --
 // this banner stays put (with the request/team id) until explicitly dismissed, and the
 // same "submit another" flow already resets the form underneath it.
+/* While this is showing, submitView() hides the new-request form entirely: leaving a freshly reset
+   form under the confirmation made it ambiguous whether the request had actually gone through or was
+   still waiting to be filled in. "Raise another request" brings the form straight back, so a POC
+   entering several teams is still one click away from the next one. */
 function submittedBannerHTML() {
   if (!S.justSubmitted) return '';
   const { label, detail } = S.justSubmitted;
@@ -613,7 +625,7 @@ function submittedBannerHTML() {
         <div style="font-weight:600;color:var(--green);font-size:15px">✓ ${esc(label)}</div>
         <div class="hint" style="margin-top:2px">${esc(detail)}</div>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="dismissSubmitted()">Got it</button>
+      <button class="btn btn-ghost btn-sm" onclick="dismissSubmitted()">Raise another request</button>
     </div>
   </div>`;
 }
