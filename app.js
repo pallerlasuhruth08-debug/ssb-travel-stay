@@ -12,6 +12,28 @@ if (!window.supabase) {
 }
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+/* Read straight off the URL, synchronously, before supabase-js gets a chance to consume and clear
+   it. Two things arrive this way and neither can be relied on via onAuthStateChange:
+     - `type=recovery` after a reset link. The client is constructed on the line above and starts
+       parsing the redirect immediately, but our listener can only register once boot() runs --
+       PASSWORD_RECOVERY is one-shot and is NOT replayed to late subscribers, so the event alone can
+       be missed entirely.
+     - `error=...&error_description=...` when the link is expired or already used (reset links are
+       single-use, and issuing a new one invalidates the previous). Nothing in the app looked at
+       this, so a dead link silently rendered the plain sign-in screen with no explanation at all --
+       reported as "the reset link just points me back to the login page".
+   `location.search` is checked too so a PKCE-style `?error=` is caught the same way. */
+const URL_AUTH = (() => {
+  const p = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+  const q = new URLSearchParams(location.search || '');
+  const get = k => p.get(k) || q.get(k);
+  return {
+    isRecovery: get('type') === 'recovery',
+    error: get('error') || get('error_code'),
+    errorText: (get('error_description') || '').replace(/\+/g, ' '),
+  };
+})();
+
 const CATEGORIES = ['Poornanga', 'Brahmachari', 'POC', 'Core Volunteer', 'Ishanga'];
 const GENDERS = ['Male', 'Female', 'Other'];
 const TRAVEL_MODES = ['Train', 'Flight', 'Bus', 'Own arrangement', 'Ashram bus', 'Ashram vehicle'];
@@ -113,8 +135,10 @@ function toast(msg) {
      1. A request accepted and then never answered (flaky mobile data, captive portal, a middlebox
         that blackholes the connection) -- the promise stays pending forever.
      2. supabase-js guards *every* auth call with `_acquireLock(-1, ...)`, an **indefinite** Web
-        Locks acquire. A second tab, or one closed mid-call, can still hold that exclusive lock, and
-        then `getSession()` never settles without a single byte crossing the network.
+        Locks acquire, and `onAuthStateChange` callbacks are invoked *while that lock is held*, with
+        the returned promise awaited. Every PostgREST query calls `getSession()` internally to attach
+        the token, so `await`ing a query inside the callback deadlocks outright: the query waits for
+        the lock the callback is holding. See `onAuthChange` -- the callback must stay synchronous.
    Neither is catchable -- there is nothing to reject. So anything that could block the UI is raced
    against a timer. (Not blocking the first render on these at all is the real fix; see boot().) */
 const BOOT_TIMEOUT_MS = 10000;
@@ -148,9 +172,17 @@ async function loadAllSafe() {
 }
 
 /* Peeked synchronously so boot() can decide what to paint *before* touching the auth client.
-   `storageKey: "supabase.auth.token"` is what the vendored client is configured with. */
+   supabase-js derives its key as `sb-${hostname.split('.')[0]}-auth-token`; the bare
+   "supabase.auth.token" in the bundle is only gotrue's internal default and is NOT what actually
+   gets written. Reading the wrong key here makes this always false, which flashes the sign-in form
+   at an already-signed-in user and then yanks it away when the restore lands. Both are checked so a
+   session stored under the legacy key still counts. */
+const STORAGE_KEYS = (() => {
+  try { return [`sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`, 'supabase.auth.token']; }
+  catch (_) { return ['supabase.auth.token']; }
+})();
 function hasStoredSession() {
-  try { return !!localStorage.getItem('supabase.auth.token'); } catch (_) { return false; }
+  try { return STORAGE_KEYS.some(k => !!localStorage.getItem(k)); } catch (_) { return false; }
 }
 
 function travelDetail(p) {
@@ -161,50 +193,86 @@ function travelDetail(p) {
 }
 
 /* ---------------- boot & data ---------------- */
+/* Runs *outside* supabase-js's auth lock -- see the onAuthStateChange comment in boot(). Anything
+   here is free to await queries. */
+async function onAuthChange(e, s) {
+  if (e === 'PASSWORD_RECOVERY') { S.session = s; S.recovery = true; render(); return; }
+  const changed = (s?.user?.id) !== (S.session?.user?.id);
+  S.session = s;
+  if (!changed) return; // the caller that established this session is already loading/rendering
+  if (s) await loadAllSafe(); else { S.profile = null; S.requests = []; S.beds = []; S.cabRequests = []; }
+  render();
+}
+
 async function boot() {
   // Registered before the initial getSession() call so the one-shot PASSWORD_RECOVERY
   // event (fired while parsing the reset-link redirect) can't be missed on page load.
-  sb.auth.onAuthStateChange(async (e, s) => {
-    if (e === 'PASSWORD_RECOVERY') { S.session = s; S.recovery = true; render(); return; }
+  // This callback MUST stay synchronous and must not await anything. supabase-js invokes it while
+  // holding its auth lock and awaits whatever it returns, while every PostgREST query internally
+  // calls getSession() to attach the token -- so awaiting a query in here is a guaranteed deadlock:
+  // the query waits for the lock this callback is holding, and nothing ever completes. That is what
+  // broke sign-in outright (SIGNED_IN fires during the sign-in call, so the call itself never
+  // resolved) and what stalled every load that had a stored session. Verified against the real
+  // vendored library: awaiting a query here never resolves, deferring it resolves in ~9ms.
+  sb.auth.onAuthStateChange((e, s) => {
     if (e === 'INITIAL_SESSION') return; // boot()'s own getSession() already handles first load
-    const changed = (s?.user?.id) !== (S.session?.user?.id);
-    S.session = s;
-    if (!changed) return;
-    if (s) await loadAllSafe(); else S.profile = null;
-    render();
+    setTimeout(() => onAuthChange(e, s), 0); // run the real work once the lock is released
   });
+  // A dead reset link must say so. Without this the app just rendered the sign-in screen and the
+  // user had no way to know the link had expired or been used already.
+  if (URL_AUTH.error) {
+    console.error('Auth redirect carried an error:', URL_AUTH.error, URL_AUTH.errorText);
+    S.restoring = false;
+    render();
+    return toast(/expired|invalid/i.test(URL_AUTH.error + URL_AUTH.errorText)
+      ? 'That password reset link has expired or was already used — request a new one.'
+      : (URL_AUTH.errorText || 'That link could not be used — request a new one.'));
+  }
+
   // Paint NOW, from local state only. Nothing above the first render is allowed to touch the
   // network or the auth client's lock -- that dependency is exactly what left the page sitting on
   // "Loading…" until a timeout fired. With no stored token this lands straight on the sign-in
   // screen; with one it shows a short "signing you in" panel that the restore below replaces.
-  S.restoring = hasStoredSession();
+  // A recovery link goes straight to the set-password screen rather than depending on the one-shot
+  // PASSWORD_RECOVERY event, which can fire before the listener above is even registered.
+  if (URL_AUTH.isRecovery) S.recovery = true;
+  S.restoring = !S.recovery && hasStoredSession();
   render();
 
+  let restored = null, failure = null;
   try {
-    const { data: { session } } = await withTimeout(sb.auth.getSession(), BOOT_TIMEOUT_MS, 'Restoring your session');
-    S.session = session;
-    // A slow data fetch must not hold the shell hostage either: draw the app and let them retry.
-    if (session) {
-      try { await withTimeout(loadAllSafe(), BOOT_TIMEOUT_MS, 'Loading your data'); }
-      catch (err) { console.error(err); toast(NET_MSG); }
-    }
+    ({ data: { session: restored } } = await withTimeout(sb.auth.getSession(), BOOT_TIMEOUT_MS, 'Restoring your session'));
   } catch (err) {
     // Covers a broken/expired stored token, an unreachable server, and a stuck auth lock alike.
     console.error('Failed to restore session:', err);
-    const wasRestoring = S.restoring;
+    failure = err;
+  }
+
+  // Anything that established a session while this was in flight -- a sign-in the user completed on
+  // the screen we already painted, or a recovery link -- wins. Overwriting it here is what threw a
+  // freshly signed-in user straight back to the login screen.
+  if (S.session) { S.restoring = false; return; }
+
+  if (failure) {
     S.session = null; S.profile = null;
-    if (err instanceof TimeoutError) {
-      // Deliberately no signOut() on a timeout: signOut() takes the same lock that may be what is
-      // stuck, and the stored token is probably fine anyway -- a reload usually signs them right
-      // back in. Only say something if they were actually expecting to be signed in.
-      if (wasRestoring) toast('Could not restore your session — please sign in again.');
+    // Deliberately no signOut() on a timeout: signOut() takes the same lock that may be what is
+    // stuck, and the stored token is probably fine anyway -- a reload usually signs them right back
+    // in. Only say something if they were actually expecting to be signed in.
+    if (failure instanceof TimeoutError) {
+      if (S.restoring) toast('Could not restore your session — please sign in again.');
     } else {
       try { await withTimeout(sb.auth.signOut(), BOOT_TIMEOUT_MS, 'Signing out'); } catch (_) { /* already broken */ }
     }
-  } finally {
-    S.restoring = false;
-    render();
+  } else {
+    S.session = restored;
+    // A slow data fetch must not hold the shell hostage either: draw the app and let them retry.
+    if (restored) {
+      try { await withTimeout(loadAllSafe(), BOOT_TIMEOUT_MS, 'Loading your data'); }
+      catch (err) { console.error(err); toast(NET_MSG); }
+    }
   }
+  S.restoring = false;
+  render();
 }
 
 async function loadAll() {

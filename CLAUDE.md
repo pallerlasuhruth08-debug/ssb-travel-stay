@@ -67,6 +67,10 @@ change — there is no virtual DOM or diffing:
   froze the page whenever `fonts.googleapis.com` was slow or filtered — the same trap as the old Supabase CDN
   tag. Don't revert it to a plain `<link>`, and don't add new blocking third-party tags. Boot-path awaits are
   raced via `withTimeout()` with a `setTimeout` failsafe — see "Nothing on the critical path…" in `HANDOVER.md`.
+- The `onAuthStateChange` callback must stay **synchronous** — it defers to `onAuthChange()` via
+  `setTimeout`. supabase-js runs it while holding its auth lock and awaits it, and every PostgREST query
+  needs that lock to attach the token, so awaiting a query inside it deadlocks: sign-in never resolves and
+  every later auth call hangs. See "Never await a query inside an onAuthStateChange callback" in `HANDOVER.md`.
 - `boot()` renders **before** it touches the auth client, and restores the session in the background.
   `sb.auth.getSession()` takes an indefinite `navigator.locks` lock that another tab can hold forever, so
   awaiting it before the first `render()` froze the page on "Loading…" for ~13s. Never put an `await` before
