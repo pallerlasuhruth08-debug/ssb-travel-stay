@@ -74,7 +74,7 @@ const S = {
   mode: 'individual', ticketPref: 'collective', reqCategory: 'intercity',
   solo: blankTrav(), travForm: [], pocTravels: false, bulkPhotos: [],
   form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin', signupRole: 'requester',
-  recovery: false, changePw: false,
+  recovery: false, changePw: false, restoring: false,
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
   coordType: 'intercity', travelType: 'intercity', memberDraft: {}, reportType: 'intercity',
   addBedLoc: null,
@@ -108,16 +108,36 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 3600);
 }
 
+/* A rejected request is the easy case -- `call()` below covers it. The nastier one is a call that
+   simply never settles. Two ways that happens here:
+     1. A request accepted and then never answered (flaky mobile data, captive portal, a middlebox
+        that blackholes the connection) -- the promise stays pending forever.
+     2. supabase-js guards *every* auth call with `_acquireLock(-1, ...)`, an **indefinite** Web
+        Locks acquire. A second tab, or one closed mid-call, can still hold that exclusive lock, and
+        then `getSession()` never settles without a single byte crossing the network.
+   Neither is catchable -- there is nothing to reject. So anything that could block the UI is raced
+   against a timer. (Not blocking the first render on these at all is the real fix; see boot().) */
+const BOOT_TIMEOUT_MS = 10000;
+const CALL_TIMEOUT_MS = 20000; // interactive clicks: generous enough for a slow mobile network
+class TimeoutError extends Error {}
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new TimeoutError(label + ' timed out')), ms); }),
+  ]);
+}
+
 /* supabase-js *rejects* (rather than resolving with an `.error`) when the request itself never
    completes -- offline, DNS/proxy blocked, an ad-blocker, a captive portal, Supabase unreachable.
    Left unguarded that rejection escapes an onclick handler, so the button stays disabled on
    "Please wait…" and the user gets no feedback whatsoever -- the "I click Sign in and nothing
-   happens" report. Funnel every auth call through this so a thrown request turns into the same
-   `{ error }` shape each caller already knows how to display. */
+   happens" report. Funnel every auth call through this so a thrown *or* hung request turns into the
+   same `{ error }` shape each caller already knows how to display. */
 const NET_MSG = "Couldn't reach the server — check your internet connection and try again.";
 async function call(fn) {
-  try { return await fn(); }
-  catch (err) { console.error('Network call failed:', err); return { data: null, error: { message: NET_MSG } }; }
+  try { return await withTimeout(fn(), CALL_TIMEOUT_MS, 'Request'); }
+  catch (err) { console.error('Auth call failed:', err); return { data: null, error: { message: NET_MSG } }; }
 }
 
 /* Same idea for the post-sign-in data load: a failure here must never strand the caller with a
@@ -127,20 +147,10 @@ async function loadAllSafe() {
   catch (err) { console.error('Failed to load app data:', err); toast(NET_MSG); return false; }
 }
 
-/* A rejected request is the easy case -- `call()` already covers it. The nastier one is a request
-   that is accepted and then never answered: flaky mobile data, a captive portal, a campus/ISP
-   middlebox that blackholes the connection. That promise stays pending *forever*, so an unraced
-   `await` on the boot path leaves the page frozen on the static "Loading…" placeholder with no
-   error and no sign-in screen -- indistinguishable from a broken deploy. Everything boot() waits
-   on is therefore raced against a timer so the UI always gets drawn. */
-const BOOT_TIMEOUT_MS = 12000;
-class TimeoutError extends Error {}
-function withTimeout(promise, ms, label) {
-  let timer;
-  return Promise.race([
-    Promise.resolve(promise).finally(() => clearTimeout(timer)),
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new TimeoutError(label + ' timed out')), ms); }),
-  ]);
+/* Peeked synchronously so boot() can decide what to paint *before* touching the auth client.
+   `storageKey: "supabase.auth.token"` is what the vendored client is configured with. */
+function hasStoredSession() {
+  try { return !!localStorage.getItem('supabase.auth.token'); } catch (_) { return false; }
 }
 
 function travelDetail(p) {
@@ -163,32 +173,38 @@ async function boot() {
     if (s) await loadAllSafe(); else S.profile = null;
     render();
   });
+  // Paint NOW, from local state only. Nothing above the first render is allowed to touch the
+  // network or the auth client's lock -- that dependency is exactly what left the page sitting on
+  // "Loading…" until a timeout fired. With no stored token this lands straight on the sign-in
+  // screen; with one it shows a short "signing you in" panel that the restore below replaces.
+  S.restoring = hasStoredSession();
+  render();
+
   try {
     const { data: { session } } = await withTimeout(sb.auth.getSession(), BOOT_TIMEOUT_MS, 'Restoring your session');
     S.session = session;
-    // Timing out here must not block the shell: the session is good, only the data fetch is slow,
-    // so draw the app and let the user retry rather than holding the whole page hostage.
+    // A slow data fetch must not hold the shell hostage either: draw the app and let them retry.
     if (session) {
       try { await withTimeout(loadAllSafe(), BOOT_TIMEOUT_MS, 'Loading your data'); }
       catch (err) { console.error(err); toast(NET_MSG); }
     }
   } catch (err) {
-    // A broken or expired stored session (e.g. after a password reset invalidated a token
-    // this browser still had saved) must never leave the page frozen on "Loading…" forever --
-    // same principle as the vendored-script load guard above. Fall back to a clean signed-out
-    // state so the sign-in screen renders regardless of what went wrong restoring the session.
+    // Covers a broken/expired stored token, an unreachable server, and a stuck auth lock alike.
     console.error('Failed to restore session:', err);
+    const wasRestoring = S.restoring;
     S.session = null; S.profile = null;
     if (err instanceof TimeoutError) {
-      // Deliberately no signOut() on a timeout: the stored token is probably fine and the network
-      // isn't, so keep it -- a reload on a working connection signs them straight back in. Calling
-      // signOut() here would throw away a good session over a bad minute of connectivity.
-      toast("Couldn't reach the server — check your connection and reload.");
+      // Deliberately no signOut() on a timeout: signOut() takes the same lock that may be what is
+      // stuck, and the stored token is probably fine anyway -- a reload usually signs them right
+      // back in. Only say something if they were actually expecting to be signed in.
+      if (wasRestoring) toast('Could not restore your session — please sign in again.');
     } else {
       try { await withTimeout(sb.auth.signOut(), BOOT_TIMEOUT_MS, 'Signing out'); } catch (_) { /* already broken */ }
     }
+  } finally {
+    S.restoring = false;
+    render();
   }
-  render();
 }
 
 async function loadAll() {
@@ -237,6 +253,7 @@ async function refresh() {
 /* ---------------- shell ---------------- */
 function render() {
   if (S.recovery) { el('app').innerHTML = recoveryView(); wireRecovery(); return; }
+  if (S.restoring && !S.session) { el('app').innerHTML = restoringView(); return; }
   if (!S.session) { el('app').innerHTML = authView(); wireAuth(); return; }
   const tabs = allowedTabs();
   const counts = {};
@@ -317,6 +334,23 @@ window.signOut = async () => {
 };
 
 /* ---------------- auth ---------------- */
+/* Shown only while a stored token is being restored. It carries an immediate way out, because the
+   restore can hang on a lock held by another tab -- in that case waiting will never help, and the
+   user should be able to just sign in instead of watching a spinner until the timeout. */
+function restoringView() {
+  return `<div class="auth-wrap">
+    <div class="auth-head">
+      <h2>MKN Travel &amp; Stay</h2>
+      <p>Signing you back in…</p>
+    </div>
+    <div class="card pad" style="text-align:center">
+      <div class="hint" style="margin-bottom:14px">Restoring your last session.</div>
+      <button class="linklike" onclick="skipRestore()">Taking too long? Sign in instead</button>
+    </div>
+  </div>`;
+}
+window.skipRestore = () => { S.restoring = false; render(); };
+
 function authView() {
   const reset = S.authMode === 'reset';
   return `<div class="auth-wrap">
