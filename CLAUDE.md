@@ -62,6 +62,11 @@ change — there is no virtual DOM or diffing:
   the signed-in user's role, and `goView`/`loadAll` both guard against rendering a view the current role can't see.
 - All server-facing functions are called via `sb.rpc(name, params)`, never `sb.from(table).insert/update(...)`
   directly — mutations always go through the `SECURITY DEFINER` functions described above.
+- Nothing on the critical render path may block on a third-party host. The Google Fonts stylesheet is
+  loaded non-render-blocking (`media="print" onload="this.media='all'"`) because as a plain stylesheet link it
+  froze the page whenever `fonts.googleapis.com` was slow or filtered — the same trap as the old Supabase CDN
+  tag. Don't revert it to a plain `<link>`, and don't add new blocking third-party tags. Boot-path awaits are
+  raced via `withTimeout()` with a `setTimeout` failsafe — see "Nothing on the critical path…" in `HANDOVER.md`.
 - Every `sb.auth.*` call goes through the `call()` helper, and post-login data loads through `loadAllSafe()`.
   `supabase-js` *rejects* on a request that never completes (offline, blocked, CDN/firewall), and an unguarded
   rejection inside a click handler silently leaves the button stuck on "Please wait…" with no error shown. Don't
