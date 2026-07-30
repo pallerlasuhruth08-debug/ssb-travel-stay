@@ -127,6 +127,22 @@ async function loadAllSafe() {
   catch (err) { console.error('Failed to load app data:', err); toast(NET_MSG); return false; }
 }
 
+/* A rejected request is the easy case -- `call()` already covers it. The nastier one is a request
+   that is accepted and then never answered: flaky mobile data, a captive portal, a campus/ISP
+   middlebox that blackholes the connection. That promise stays pending *forever*, so an unraced
+   `await` on the boot path leaves the page frozen on the static "Loading…" placeholder with no
+   error and no sign-in screen -- indistinguishable from a broken deploy. Everything boot() waits
+   on is therefore raced against a timer so the UI always gets drawn. */
+const BOOT_TIMEOUT_MS = 12000;
+class TimeoutError extends Error {}
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new TimeoutError(label + ' timed out')), ms); }),
+  ]);
+}
+
 function travelDetail(p) {
   if (p.travel_mode === 'Train')  return [p.train_name, p.train_number].filter(Boolean).join(' · ');
   if (p.travel_mode === 'Flight') return [p.flight_name, p.flight_number].filter(Boolean).join(' · ');
@@ -148,17 +164,29 @@ async function boot() {
     render();
   });
   try {
-    const { data: { session } } = await sb.auth.getSession();
+    const { data: { session } } = await withTimeout(sb.auth.getSession(), BOOT_TIMEOUT_MS, 'Restoring your session');
     S.session = session;
-    if (session) await loadAllSafe();
+    // Timing out here must not block the shell: the session is good, only the data fetch is slow,
+    // so draw the app and let the user retry rather than holding the whole page hostage.
+    if (session) {
+      try { await withTimeout(loadAllSafe(), BOOT_TIMEOUT_MS, 'Loading your data'); }
+      catch (err) { console.error(err); toast(NET_MSG); }
+    }
   } catch (err) {
     // A broken or expired stored session (e.g. after a password reset invalidated a token
     // this browser still had saved) must never leave the page frozen on "Loading…" forever --
     // same principle as the vendored-script load guard above. Fall back to a clean signed-out
     // state so the sign-in screen renders regardless of what went wrong restoring the session.
-    console.error('Failed to restore session, signing out locally:', err);
+    console.error('Failed to restore session:', err);
     S.session = null; S.profile = null;
-    try { await sb.auth.signOut(); } catch (_) { /* already broken; nothing more to do */ }
+    if (err instanceof TimeoutError) {
+      // Deliberately no signOut() on a timeout: the stored token is probably fine and the network
+      // isn't, so keep it -- a reload on a working connection signs them straight back in. Calling
+      // signOut() here would throw away a good session over a bad minute of connectivity.
+      toast("Couldn't reach the server — check your connection and reload.");
+    } else {
+      try { await withTimeout(sb.auth.signOut(), BOOT_TIMEOUT_MS, 'Signing out'); } catch (_) { /* already broken */ }
+    }
   }
   render();
 }
@@ -1779,5 +1807,24 @@ window.downloadReport = () => {
   a.remove();
   URL.revokeObjectURL(url);
 };
+
+/* Last line of defence. Everything above is raced or guarded, but this app has now been frozen on
+   the "Loading…" placeholder twice by causes nobody predicted (a CDN that stopped resolving, then a
+   stored session that made getSession() throw). If boot() somehow still hasn't drawn anything by
+   the time this fires, replace the placeholder with a screen the user can actually act on rather
+   than leaving them staring at a page that looks broken. */
+setTimeout(() => {
+  const appEl = el('app');
+  if (!appEl || !appEl.querySelector('.loading')) return; // boot() rendered; nothing to do
+  console.error('boot() never rendered — falling back to the sign-in screen.');
+  try {
+    S.session = null; S.profile = null;
+    render();
+    toast("Couldn't reach the server — check your connection and reload.");
+  } catch (err) {
+    console.error('Failsafe render failed:', err);
+    appEl.innerHTML = '<div class="loading">Couldn\'t start the app — check your internet connection and reload the page.</div>';
+  }
+}, BOOT_TIMEOUT_MS + 3000);
 
 boot();

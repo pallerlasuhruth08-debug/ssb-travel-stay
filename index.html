@@ -6,7 +6,14 @@
 <title>MKN Travel &amp; Stay · SSB Bengaluru</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Loaded non-render-blocking on purpose. A plain stylesheet link here holds up first paint until
+     fonts.googleapis.com answers, so if that host is slow, filtered or silently dropped (ISP/campus
+     firewalls do this) the page shows nothing at all and reads as "the app won't load" -- the same
+     third-party-reachability trap that the Supabase CDN script caused before it was vendored.
+     media="print" keeps it out of the critical path; onload promotes it once it actually arrives.
+     Until then the CSS font stacks fall back to the local sans-serif/serif and the app is usable. -->
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <style>
   :root{
     --saffron:#E07B39;--saffron-deep:#C25E2A;--ivory:#FBF6EF;--card:#FFFDF9;

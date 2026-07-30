@@ -138,6 +138,27 @@ Three ways to deal with a lost/forgotten password, in order of preference:
    `select encrypted_password = extensions.crypt('<new password>', encrypted_password) from auth.users where email = '<email>';`
    — that's the same bcrypt comparison the Auth server does at sign-in, so `true` means the password really works.
 
+### Nothing on the critical path may block on a third-party host
+
+The page is not allowed to depend on any external host being reachable in order to render. This has
+bitten the app **twice**: first the Supabase CDN script tag (fixed by vendoring), then the Google
+Fonts stylesheet, which was a plain `<link rel="stylesheet">` and therefore **render-blocking** —
+if `fonts.googleapis.com` is slow, filtered, or silently drops the connection (campus/ISP/corporate
+middleboxes do exactly this), the browser refuses to paint and the user sees a dead page. Reproduced
+in a real Chromium with `page.route()` holding that host open without answering: on the old markup
+the page **never** became usable, and even when the host merely failed slowly it delayed first paint
+by ~13s. It now loads with `media="print" onload="this.media='all'"` (plus a `<noscript>` fallback),
+which keeps it out of the critical path; until the font arrives the CSS falls back to local
+sans-serif/serif and the app is fully usable. **Don't "tidy" that back into a plain stylesheet link,
+and don't add new render-blocking third-party `<link>`/`<script>` tags.**
+
+Related: a request that is *accepted and never answered* leaves its promise pending forever, which a
+`try`/`catch` cannot see. Everything `boot()` waits on is raced against `withTimeout(...)`
+(`BOOT_TIMEOUT_MS`), and a final `setTimeout` failsafe swaps the static "Loading…" placeholder for a
+usable sign-in screen if `boot()` somehow still hasn't rendered. A boot-path timeout deliberately
+does **not** call `signOut()` — the stored token is probably fine and the network isn't, so throwing
+away a good session over a bad minute of connectivity would be the wrong trade.
+
 ### Auth calls must never fail silently
 
 `supabase-js` **rejects** (rather than resolving with an `.error`) when a request never completes at all — offline,
