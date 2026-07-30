@@ -96,7 +96,7 @@ const S = {
   mode: 'individual', ticketPref: 'collective', reqCategory: 'intercity',
   solo: blankTrav(), travForm: [], pocTravels: false, bulkPhotos: [],
   form: {}, cabForm: {}, open: new Set(), busy: false, authMode: 'signin', signupRole: 'requester',
-  recovery: false, changePw: false, restoring: false,
+  recovery: false, changePw: false, restoring: false, newRequest: false,
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
   coordType: 'intercity', travelType: 'intercity', memberDraft: {}, reportType: 'intercity',
   addBedLoc: null,
@@ -577,6 +577,38 @@ function submitView() {
     ...S.cabRequests.filter(c => c.created_by === S.session.user.id).map(r => ({ r, cab: true })),
   ].sort((a, b) => new Date(b.r.created_at) - new Date(a.r.created_at));
 
+  /* The tab shows exactly one thing at a time. It used to stack the new-request form under the
+     list of your existing requests, so every action on one of your own cards -- opening it,
+     cancelling it, adding or removing a team member -- left a big empty form sitting underneath
+     that had nothing to do with what you were doing. With no requests yet the form IS the tab; once
+     you have some, the list is the tab and the form is something you ask for. */
+  const showForm = !S.justSubmitted && (S.newRequest || !mine.length);
+
+  if (S.justSubmitted) {
+    return `
+  <div class="view active">
+    <div class="view-head"><h2>Request submitted</h2></div>
+    ${submittedBannerHTML()}
+  </div>`;
+  }
+
+  if (!showForm) {
+    return `
+  <div class="view active">
+    <div class="view-head">
+      <h2>Your requests</h2>
+      <p>Open one to see exactly where it stands — review, ticketing, or bed allotment.</p>
+    </div>
+    <div class="card pad" style="margin-bottom:18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <div><h3 style="font-size:20px">Requests you've raised</h3></div>
+        <button class="btn btn-primary btn-sm" onclick="setNewRequest(true)">Raise a new request</button>
+      </div>
+      ${mine.map(m => m.cab ? cabCard(m.r, myCabSubmitInner(m.r)) : reqCard(m.r, mySubmitInner(m.r))).join('')}
+    </div>
+  </div>`;
+  }
+
   return `
   <div class="view active">
     <div class="view-head">
@@ -586,17 +618,11 @@ function submitView() {
         : 'Raise a request for yourself, or as a POC on behalf of your team. Each traveller needs age, gender, category and an ID for ticket booking.'}</p>
     </div>
 
-    ${submittedBannerHTML()}
-
-    ${mine.length ? `<div class="card pad" style="margin-bottom:18px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-        <div><h3 style="font-size:20px">Requests you've raised</h3>
-          <div class="hint">Open one to see exactly where it stands — review, ticketing, or bed allotment.</div></div>
-      </div>
-      ${mine.map(m => m.cab ? cabCard(m.r, myCabSubmitInner(m.r)) : reqCard(m.r, mySubmitInner(m.r))).join('')}
+    ${mine.length ? `<div style="margin-bottom:14px">
+      <button class="linklike" onclick="setNewRequest(false)">← Back to your requests</button>
     </div>` : ''}
 
-    ${S.justSubmitted ? '' : `<div class="card pad">
+    <div class="card pad">
       <div class="field">
         <label>What kind of request is this?</label>
         <div class="seg">
@@ -605,9 +631,10 @@ function submitView() {
         </div>
       </div>
       ${cab ? cabFormHTML() : intercityFormHTML()}
-    </div>`}
+    </div>
   </div>`;
 }
+window.setNewRequest = v => { S.newRequest = v; window.scrollTo({ top: 0, behavior: 'smooth' }); render(); };
 
 // A toast alone faded before anyone could confirm a submission actually went through --
 // this banner stays put (with the request/team id) until explicitly dismissed, and the
@@ -629,7 +656,13 @@ function submittedBannerHTML() {
     </div>
   </div>`;
 }
-window.dismissSubmitted = () => { S.justSubmitted = null; render(); };
+window.dismissSubmitted = () => {
+  // The button reads "Raise another request", so it must land on the form rather than the list --
+  // a POC entering several teams stays one click from the next one.
+  S.justSubmitted = null; S.newRequest = true;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  render();
+};
 
 function intercityFormHTML() {
   const poc = S.mode === 'poc';
@@ -972,11 +1005,11 @@ async function submitRequest() {
       S.form.team = ''; S.form.plan = '';
       S.travForm = [blankTrav()]; S.pocTravels = false; S.bulkPhotos = [];
       S.open.clear();
-      S.justSubmitted = { label: `"${team}" submitted as ${data} — awaiting coordinator approval`, detail: 'Raise another team below, or you\'re done for now.' };
+      S.justSubmitted = { label: `"${team}" submitted as ${data} — awaiting coordinator approval`, detail: 'Raise another team, or you\'re done for now.' };
       await refresh(); render();
     } else {
       S.form = {}; S.solo = blankTrav();
-      S.justSubmitted = { label: `Request ${data} submitted — awaiting coordinator approval`, detail: 'You\'ll see it in "Requests you\'ve raised" above as it moves through the pipeline.' };
+      S.justSubmitted = { label: `Request ${data} submitted — awaiting coordinator approval`, detail: 'You\'ll see it under "Your requests" as it moves through the pipeline.' };
       await refresh(); render();
     }
   } catch (err) {
@@ -1007,7 +1040,7 @@ async function submitCabRequest() {
 
     S.busy = false;
     S.cabForm = {};
-    S.justSubmitted = { label: `Cab request ${data} submitted — awaiting coordinator approval`, detail: 'You\'ll see it in "Requests you\'ve raised" above as it moves through the pipeline.' };
+    S.justSubmitted = { label: `Cab request ${data} submitted — awaiting coordinator approval`, detail: 'You\'ll see it under "Your requests" as it moves through the pipeline.' };
     await refresh(); render();
   } catch (err) {
     S.busy = false; render();
