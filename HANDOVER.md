@@ -154,10 +154,33 @@ and don't add new render-blocking third-party `<link>`/`<script>` tags.**
 
 Related: a request that is *accepted and never answered* leaves its promise pending forever, which a
 `try`/`catch` cannot see. Everything `boot()` waits on is raced against `withTimeout(...)`
-(`BOOT_TIMEOUT_MS`), and a final `setTimeout` failsafe swaps the static "Loading…" placeholder for a
-usable sign-in screen if `boot()` somehow still hasn't rendered. A boot-path timeout deliberately
-does **not** call `signOut()` — the stored token is probably fine and the network isn't, so throwing
-away a good session over a bad minute of connectivity would be the wrong trade.
+(`BOOT_TIMEOUT_MS`), `call()` applies `CALL_TIMEOUT_MS` to interactive auth clicks, and a final
+`setTimeout` failsafe swaps the static "Loading…" placeholder for a usable sign-in screen if
+`boot()` somehow still hasn't rendered. A boot-path timeout deliberately does **not** call
+`signOut()` — that takes the very lock that may be stuck (see below), and the stored token is
+probably fine anyway.
+
+### The first render must not depend on the auth client at all
+
+A timeout is damage control, not a fix. `boot()` used to `await sb.auth.getSession()` *before* its
+first `render()`, so anything that delayed that call showed up as a frozen "Loading…" screen —
+reported in the field as ~13s of nothing, then the sign-in page with a misleading "couldn't reach
+the server" toast (the 12s timeout firing).
+
+The cause is not the network. `supabase-js` wraps **every** auth call in `_acquireLock(-1, ...)` —
+an **indefinite** `navigator.locks` acquire on `lock:${storageKey}`. A second tab, or one closed
+mid-call, can still hold that exclusive lock, and then `getSession()` never settles *without a single
+byte crossing the network*. Reproduced in Chromium by making that acquire never resolve: the old
+build took **12.1s** to become usable, the current one **0.5s**.
+
+So `boot()` now paints from local state first and restores in the background:
+`hasStoredSession()` peeks `localStorage` synchronously, `render()` runs immediately, and only then
+does the session restore run — updating the view when it finishes. With no stored token that lands
+straight on the sign-in screen with zero waiting; with one it shows `restoringView()`, which carries
+a **"Sign in instead"** escape hatch precisely because waiting out a stuck lock never helps.
+
+**Don't reintroduce an `await` before the first `render()` in `boot()`.** The hang-resilience suite
+asserts the page is usable within 3s while `navigator.locks` is jammed, which catches exactly that.
 
 ### Auth calls must never fail silently
 

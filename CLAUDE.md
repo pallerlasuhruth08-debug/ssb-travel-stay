@@ -67,6 +67,10 @@ change — there is no virtual DOM or diffing:
   froze the page whenever `fonts.googleapis.com` was slow or filtered — the same trap as the old Supabase CDN
   tag. Don't revert it to a plain `<link>`, and don't add new blocking third-party tags. Boot-path awaits are
   raced via `withTimeout()` with a `setTimeout` failsafe — see "Nothing on the critical path…" in `HANDOVER.md`.
+- `boot()` renders **before** it touches the auth client, and restores the session in the background.
+  `sb.auth.getSession()` takes an indefinite `navigator.locks` lock that another tab can hold forever, so
+  awaiting it before the first `render()` froze the page on "Loading…" for ~13s. Never put an `await` before
+  that first `render()` — see "The first render must not depend on the auth client" in `HANDOVER.md`.
 - Every `sb.auth.*` call goes through the `call()` helper, and post-login data loads through `loadAllSafe()`.
   `supabase-js` *rejects* on a request that never completes (offline, blocked, CDN/firewall), and an unguarded
   rejection inside a click handler silently leaves the button stuck on "Please wait…" with no error shown. Don't
