@@ -160,6 +160,19 @@ Related: a request that is *accepted and never answered* leaves its promise pend
 `signOut()` — that takes the very lock that may be stuck (see below), and the stored token is
 probably fine anyway.
 
+### The Submit tab shows one thing at a time
+
+It used to render the new-request form *underneath* "Requests you've raised", so every action on one
+of your own cards — opening it, cancelling it, adding or removing a team member — left a large empty
+form sitting below that had nothing to do with what you were doing.
+
+`submitView()` now returns exactly one of three screens: the post-submit confirmation
+(`S.justSubmitted`), your requests list, or the new-request form. With **no** requests yet the form
+*is* the tab, so a first-time requester still lands straight on it. Once you have requests, the list
+is the tab and the form is something you ask for via **"Raise a new request"** (`S.newRequest`), with
+**"← Back to your requests"** to return. `dismissSubmitted()` sets `S.newRequest = true` so the
+confirmation's "Raise another request" lands on the form rather than the list.
+
 ### A focused screen replaces the page, it does not stack on it
 
 **Change password** and the **post-submit confirmation** each used to render with the whole Submit
