@@ -160,6 +160,32 @@ Related: a request that is *accepted and never answered* leaves its promise pend
 `signOut()` — that takes the very lock that may be stuck (see below), and the stored token is
 probably fine anyway.
 
+### Never await a query inside an onAuthStateChange callback
+
+`supabase-js` invokes `onAuthStateChange` callbacks **while holding its auth lock**, and awaits the
+promise the callback returns. Every PostgREST query calls `getSession()` internally to attach the
+token — which needs that same lock. So `await`ing a query inside the callback is a guaranteed
+deadlock: the query waits for the lock the callback is holding, and neither ever completes.
+
+`boot()`'s listener did exactly that (`if (s) await loadAll()`), which broke two things outright:
+sign-in never resolved (`SIGNED_IN` fires *during* `signInWithPassword`, so the call itself hung, and
+the stuck lock then hung every later auth call too), and any load with a stored session stalled until
+the boot timeout fired. Isolated against the real vendored library: awaiting a query in the callback
+never resolves, deferring it resolves in **~9ms**.
+
+The callback is therefore **synchronous** and hands off via `setTimeout(..., 0)` to `onAuthChange()`,
+which runs after the lock is released and is free to await. **Don't make that callback `async` again.**
+
+### Reset links that are expired or already used
+
+Reset links are single-use, and issuing a new one invalidates the previous. A dead link redirects back
+with `#error=access_denied&error_code=otp_expired&...`. Nothing read that, so the app just rendered the
+plain sign-in screen — reported as "the reset link points me back to the login page". `URL_AUTH` now
+parses the hash/query synchronously at startup (before `supabase-js` consumes and clears it) and says
+so plainly. It also reads `type=recovery` directly rather than relying on the one-shot
+`PASSWORD_RECOVERY` event, which can fire before the listener is even registered — the client is
+constructed at module load, the listener only when `boot()` runs.
+
 ### The first render must not depend on the auth client at all
 
 A timeout is damage control, not a fix. `boot()` used to `await sb.auth.getSession()` *before* its
