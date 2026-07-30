@@ -622,7 +622,7 @@ function submitView() {
       <button class="linklike" onclick="setNewRequest(false)">← Back to your requests</button>
     </div>` : ''}
 
-    ${S.justSubmitted ? '' : `<div class="card pad">
+    <div class="card pad">
       <div class="field">
         <label>What kind of request is this?</label>
         <div class="seg">
@@ -631,7 +631,7 @@ function submitView() {
         </div>
       </div>
       ${cab ? cabFormHTML() : intercityFormHTML()}
-    </div>`}
+    </div>
   </div>`;
 }
 window.setNewRequest = v => { S.newRequest = v; window.scrollTo({ top: 0, behavior: 'smooth' }); render(); };
