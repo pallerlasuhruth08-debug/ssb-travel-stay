@@ -1,6 +1,6 @@
 /* MKN Travel & Stay · SSB Bengaluru — vanilla JS + Supabase. */
-const SUPABASE_URL = 'https://zbqetpvgipgagmmyupcn.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_9N-AtGZTNYsOLNAYj1W8AQ_ya6ccY6C';
+const SUPABASE_URL = 'https://mkn-api.213-210-21-238.sslip.io';
+const SUPABASE_KEY = 'sb_publishable_FhbnL3k2QmumncICfbm8dD_goZi-4TS';
 
 // If vendor/supabase.js failed to load (slow connection, blocked request, bad cache), the
 // rest of this script can't run at all -- without this check that failure was silent, an
