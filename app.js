@@ -368,7 +368,7 @@ function render() {
       <span class="step"><span class="num">2</span>Coordinator approves</span><span class="arr">→</span>
       <span class="step"><span class="num">3</span>Travel desk books ticket</span><span class="arr">→</span>
       <span class="step"><span class="num">4</span>Accommodation allots bed</span><span class="arr">→</span>
-      <span class="step"><span class="num">✓</span>Confirmed &amp; notified</span>
+      <span class="step"><span class="num">✓</span>Confirmed</span>
     </div>
   </div>
 
@@ -1374,7 +1374,7 @@ function coordInner(r, stage) {
     </div>`;
   }
   return `<div class="actions">
-    <button class="btn btn-primary btn-sm" onclick="decide('${r.id}','approved')">Approve → send to travel desk</button>
+    <button class="btn btn-primary btn-sm" onclick="decide('${r.id}','approved')">Approve → send to next step</button>
     <button class="btn btn-ghost btn-sm" onclick="decide('${r.id}','rejected')">Send back</button>
     ${editBtn}
   </div>`;
@@ -1389,7 +1389,7 @@ window.decide = async (id, decision) => {
   const { error } = await sb.rpc('mkn_tr_decide', { p_request_id: id, p_decision: decision, p_reason: reason || null });
   if (error) return toast(error.message);
   await refresh(); render();
-  toast(decision === 'approved' ? 'Approved — sent to travel desk.' : 'Sent back to the requester.');
+  toast(decision === 'approved' ? 'Approved — sent to next step.' : 'Sent back to the requester.');
 };
 
 function cabCoordInner(r, stage) {
@@ -1532,7 +1532,7 @@ function deskView(which) {
   }
 
   const head = isTravel
-    ? { t: 'Travel desk — book tickets', p: 'Approved requests await ticketing. Enter the PNR / ticket reference (or a collective reference), attach the booked ticket, then confirm to notify the requester and pass on for bed allotment.' }
+    ? { t: 'Travel desk — book tickets', p: 'Approved requests await ticketing. Enter the PNR / ticket reference (or a collective reference), attach the booked ticket, then confirm to pass it on for bed allotment.' }
     // Accommodation no longer waits on ticketing -- beds can be pre-assigned as soon as a
     // request is approved, fully independent of the travel desk's own queue.
     : { t: 'Accommodation — allot beds', p: 'Approved and ticketed travellers can be housed. Pick a free bed from the master for each person as soon as the request is approved; the final confirm becomes available once the ticket is booked.' };
@@ -1568,8 +1568,8 @@ function cabTravelInner(r) {
       <input id="drvVehicle-${r.id}" value="${esc(r.vehicle_number || '')}" placeholder="e.g. KA-01-AB-1234"></div>
   </div>
   <div class="actions">
-    <button class="btn btn-primary btn-sm" onclick="bookCab('${r.id}')">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'} &amp; notify</button>
-    <span class="hint">${r.status === 'approved' ? `Shares the driver's details with ${esc(r.poc_email || 'the POC')}.` : 'Corrects the driver details already on file.'}</span>
+    <button class="btn btn-primary btn-sm" onclick="bookCab('${r.id}')">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'}</button>
+    <span class="hint">${r.status === 'approved' ? 'Driver details become visible to the POC in the app.' : 'Corrects the driver details already on file.'}</span>
   </div>`;
 }
 
@@ -1580,7 +1580,7 @@ window.bookCab = async id => {
   const { error } = await sb.rpc('mkn_cab_book', { p_request_id: id, p_driver_name: name, p_driver_phone: phone, p_vehicle_number: vehicle || null });
   if (error) return toast(error.message);
   await refresh(); render();
-  toast('Cab booked ✓ Driver details shared with the POC.');
+  toast('Cab booked ✓ Driver details are now visible to the POC.');
 };
 
 function travelInner(r) {
@@ -1605,8 +1605,8 @@ function travelInner(r) {
 
   return `<div class="workbox"><label>Ticket booking</label>${rows}</div>
   <div class="actions">
-    <button class="btn btn-primary btn-sm" onclick="book('${r.id}',${collective})">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'} &amp; notify</button>
-    <span class="hint">${r.status === 'approved' ? `Emails the ticket to ${esc(r.contact_email || 'the requester')} and passes on for bed allotment.` : 'Corrects the PNR / ticket already on file.'}</span>
+    <button class="btn btn-primary btn-sm" onclick="book('${r.id}',${collective})">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'}</button>
+    <span class="hint">${r.status === 'approved' ? 'Passes the ticket on for bed allotment.' : 'Corrects the PNR / ticket already on file.'}</span>
   </div>`;
 }
 
@@ -1668,7 +1668,7 @@ window.book = async (id, collective) => {
   if (error) return toast(error.message);
   if (collective) delete ticketFiles[id]; else list.forEach(p => delete ticketFiles[p.id]);
   await refresh(); render();
-  toast('Tickets booked ✓ Requester notified. Now awaiting bed.');
+  toast('Tickets booked ✓ Now awaiting bed.');
 };
 
 function accomInner(r) {
@@ -1690,7 +1690,7 @@ function accomInner(r) {
   } else {
     action = `<div class="actions">
         <button class="btn btn-primary btn-sm" onclick="completeReq('${r.id}')">Allot beds &amp; confirm</button>
-        <span class="hint">Sends final stay details to ${esc(r.contact_email || 'the requester')}.</span>
+        <span class="hint">Marks the request as fully confirmed.</span>
       </div>`;
   }
   return `<div class="workbox"><label>Bed allotment at SSB</label>${rows}</div>${action}`;
@@ -1724,7 +1724,7 @@ window.completeReq = async id => {
   if (error) return toast(error.message);
   const r = S.requests.find(x => x.id === id);
   await refresh(); render();
-  toast('Confirmed ✓ Full travel + stay details sent to ' + (r?.contact_email || 'requester') + '.');
+  toast('Confirmed ✓ Travel and stay details are ready in the app.');
 };
 
 /* ---------------- bed master ---------------- */
