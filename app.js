@@ -1590,7 +1590,11 @@ function travelInner(r) {
   // or several (train for one, flight for another). Left as the requester's call, a mixed-mode team
   // gave the desk a single file slot with no way to attach a second ticket. The desk can override
   // it here per request; the requester's choice is still the starting point.
-  const collective = (S.ticketMode[r.id] || r.ticket_pref) === 'collective';
+  // A team of more than one traveller almost always needs separate tickets (different trains/
+  // flights/buses), so default multi-traveller requests to individual mode regardless of what the
+  // requester guessed at submit time -- the desk can still switch back with the toggle below.
+  const defaultMode = list.length > 1 ? 'individual' : (r.ticket_pref || 'collective');
+  const collective = (S.ticketMode[r.id] || defaultMode) === 'collective';
   const ticketDrop = id => `<div class="file-drop" style="margin-top:6px" onclick="pickTicket('${id}')" id="tktDrop-${id}">
       <span>Attach booked ticket (PDF / image)</span></div>
     <input type="file" accept="image/*,.pdf" hidden id="tktFile-${id}" onchange="ticketPicked('${id}')">`;
