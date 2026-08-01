@@ -99,7 +99,7 @@ const S = {
   recovery: false, changePw: false, restoring: false, newRequest: false,
   deskFilter: 'pending', coordFilter: 'review', editing: new Set(),
   coordType: 'intercity', travelType: 'intercity', memberDraft: {}, reportType: 'intercity',
-  addBedLoc: null,
+  addBedLoc: null, ticketMode: {},
 };
 const NEW_LOCATION = '__new__';
 
@@ -1585,7 +1585,12 @@ window.bookCab = async id => {
 
 function travelInner(r) {
   const list = travellers(r);
-  const collective = r.ticket_pref === 'collective';
+  // The requester picks ticket_pref at submit time and it defaults to "collective", but they are
+  // guessing -- the travel desk is who actually finds out whether the team ends up on one booking
+  // or several (train for one, flight for another). Left as the requester's call, a mixed-mode team
+  // gave the desk a single file slot with no way to attach a second ticket. The desk can override
+  // it here per request; the requester's choice is still the starting point.
+  const collective = (S.ticketMode[r.id] || r.ticket_pref) === 'collective';
   const ticketDrop = id => `<div class="file-drop" style="margin-top:6px" onclick="pickTicket('${id}')" id="tktDrop-${id}">
       <span>Attach booked ticket (PDF / image)</span></div>
     <input type="file" accept="image/*,.pdf" hidden id="tktFile-${id}" onchange="ticketPicked('${id}')">`;
@@ -1603,12 +1608,25 @@ function travelInner(r) {
         ${needsTicket(p) ? ticketDrop(p.id) : ''}
       </div>`).join('');
 
-  return `<div class="workbox"><label>Ticket booking</label>${rows}</div>
+  return `<div class="workbox">
+    <label>Ticket booking</label>
+    <div class="seg" style="margin-bottom:10px">
+      <button class="${collective ? 'on' : ''}" onclick="setTicketMode('${r.id}','collective')">One ticket for the group</button>
+      <button class="${!collective ? 'on' : ''}" onclick="setTicketMode('${r.id}','individual')">Separate ticket per traveller</button>
+    </div>
+    <div class="hint" style="margin-bottom:10px">${collective
+      ? 'One reference and one attachment covering everyone.'
+      : `A reference and an attachment for each traveller — use this when the team is split across trains, flights or buses.`}</div>
+    ${rows}</div>
   <div class="actions">
     <button class="btn btn-primary btn-sm" onclick="book('${r.id}',${collective})">${r.status === 'approved' ? 'Confirm booking' : 'Update booking'}</button>
     <span class="hint">${r.status === 'approved' ? 'Passes the ticket on for bed allotment.' : 'Corrects the PNR / ticket already on file.'}</span>
   </div>`;
 }
+
+/* Per-request override of ticket_pref, set by the travel desk. Staged files live in ticketFiles
+   (module scope) so they survive the re-render that switching modes triggers. */
+window.setTicketMode = (id, mode) => { S.ticketMode[id] = mode; render(); };
 
 // Keyed by request id for the collective flow, or by traveller id for the individual
 // flow -- the two id spaces never collide (REQ-xxxx vs uuid), so one map covers both.
