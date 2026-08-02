@@ -120,15 +120,15 @@ function blankTrav(extra) {
     isPoc: false, ...extra };
 }
 
-let toastTimer;
+// Staff are multitasking on these screens and kept missing the auto-dismissing toast (reported
+// in the 2026-08-02 review), so messages now stay up until the user clicks the close button.
 function toast(msg) {
-  const t = el('toast');
-  if (!t) { console.warn('toast:', msg); return; } // never let the error reporter itself throw
-  t.textContent = msg;
+  const t = el('toast'), m = el('toastMsg');
+  if (!t || !m) { console.warn('toast:', msg); return; } // never let the error reporter itself throw
+  m.textContent = msg;
   t.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 3600);
 }
+window.dismissToast = () => el('toast')?.classList.remove('show');
 
 /* A rejected request is the easy case -- `call()` below covers it. The nastier one is a call that
    simply never settles. Two ways that happens here:
@@ -1812,6 +1812,11 @@ function masterView() {
   </div>`;
 }
 
+// Different people typed "1", "01" and "001" for what was meant to be the same bed (reported in
+// the 2026-08-02 review), silently fragmenting one bed into duplicates. Purely-numeric labels are
+// normalized to their plain integer form; anything with letters (e.g. "12A") is left untouched.
+const normalizeBedNumber = x => /^\d+$/.test(x) ? String(parseInt(x, 10)) : x;
+
 function parseBedNumbers(raw) {
   if (/^\d+\s*-\s*\d+$/.test(raw)) {
     const [a, b] = raw.split('-').map(x => parseInt(x.trim(), 10));
@@ -1819,14 +1824,27 @@ function parseBedNumbers(raw) {
     for (let i = Math.min(a, b); i <= Math.max(a, b); i++) out.push(String(i));
     return out;
   }
-  return raw.split(',').map(x => x.trim()).filter(Boolean);
+  return raw.split(',').map(x => x.trim()).filter(Boolean).map(normalizeBedNumber);
+}
+
+// Same idea for locations: "Anna Block A" typed with different spacing/casing by different staff
+// fragmented one location into several in the dropdown. A brand-new location is still free text
+// (staff need to name real-world blocks we can't predict), but it's matched case/whitespace-
+// insensitively against locations that already exist so it reuses the existing entry instead of
+// forking a near-duplicate, and title-cased when it's genuinely new.
+function normalizeLocation(raw, knownLocs) {
+  const trimmed = raw.trim().replace(/\s+/g, ' ');
+  const existing = knownLocs.find(l => l.toLowerCase() === trimmed.toLowerCase());
+  if (existing) return existing;
+  return trimmed.replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
 }
 
 window.setAddBedLoc = v => { S.addBedLoc = v; render(); };
 
 window.addBeds = async () => {
   const usingNew = (S.addBedLoc || NEW_LOCATION) === NEW_LOCATION;
-  const loc = usingNew ? val('acLocNew') : (S.addBedLoc || '');
+  const knownLocs = [...new Set(S.beds.map(b => b.location))];
+  const loc = usingNew ? normalizeLocation(val('acLocNew') || '', knownLocs) : (S.addBedLoc || '');
   const raw = val('acBeds');
   if (!loc || !raw) return toast('Enter a location and bed numbers.');
   const beds = parseBedNumbers(raw);
@@ -1924,13 +1942,91 @@ function buildCabReportRows() {
   ]);
 }
 
-function csvCell(v) {
-  const s = String(v ?? '');
-  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+/* ---------------- xlsx export ----------------
+   Mobile browsers treat a downloaded .csv as plain text with no "open in Excel" option
+   (reported in the 2026-08-02 review), so the report downloads a real .xlsx workbook instead --
+   a minimal, dependency-free OOXML zip built by hand rather than pulling in a charting-library-
+   sized package for one flat sheet. */
+function crc32(bytes) {
+  const t = crc32.table || (crc32.table = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      table[n] = c >>> 0;
+    }
+    return table;
+  })());
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) crc = t[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-function toCSV(columns, rows) {
-  return [columns, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
+// A .xlsx is a zip of XML parts. Every entry is stored uncompressed (method 0) so this needs no
+// deflate implementation -- just correct local/central-directory headers and a CRC32 per file.
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const locals = [], centrals = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = f.data, crc = crc32(data), size = data.length;
+    const local = new Uint8Array(30 + name.length + size);
+    const ldv = new DataView(local.buffer);
+    ldv.setUint32(0, 0x04034b50, true); ldv.setUint16(4, 20, true); ldv.setUint16(6, 0, true);
+    ldv.setUint16(8, 0, true); ldv.setUint16(10, 0, true); ldv.setUint16(12, 0x21, true);
+    ldv.setUint32(14, crc, true); ldv.setUint32(18, size, true); ldv.setUint32(22, size, true);
+    ldv.setUint16(26, name.length, true); ldv.setUint16(28, 0, true);
+    local.set(name, 30); local.set(data, 30 + name.length);
+    locals.push(local);
+
+    const central = new Uint8Array(46 + name.length);
+    const cdv = new DataView(central.buffer);
+    cdv.setUint32(0, 0x02014b50, true); cdv.setUint16(4, 20, true); cdv.setUint16(6, 20, true);
+    cdv.setUint16(8, 0, true); cdv.setUint16(10, 0, true); cdv.setUint16(12, 0, true); cdv.setUint16(14, 0x21, true);
+    cdv.setUint32(16, crc, true); cdv.setUint32(20, size, true); cdv.setUint32(24, size, true);
+    cdv.setUint16(28, name.length, true); cdv.setUint16(30, 0, true); cdv.setUint16(32, 0, true);
+    cdv.setUint16(34, 0, true); cdv.setUint16(36, 0, true); cdv.setUint32(38, 0, true);
+    cdv.setUint32(42, offset, true);
+    central.set(name, 46);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const centralSize = centrals.reduce((s, c) => s + c.length, 0);
+  const end = new Uint8Array(22);
+  const edv = new DataView(end.buffer);
+  edv.setUint32(0, 0x06054b50, true); edv.setUint16(8, files.length, true); edv.setUint16(10, files.length, true);
+  edv.setUint32(12, centralSize, true); edv.setUint32(16, offset, true);
+  return new Blob([...locals, ...centrals, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+const colLetter = n => { let s = '', i = n + 1; while (i > 0) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); } return s; };
+const xmlEsc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/[\r\n]+/g, ' ');
+
+function xlsxCell(ref, v) {
+  const s = v == null ? '' : String(v);
+  // Leading-zero strings (phone numbers, PINs) must stay text or Excel silently drops the zero.
+  const isNum = s !== '' && /^-?\d+(\.\d+)?$/.test(s) && !/^-?0\d/.test(s);
+  return isNum ? `<c r="${ref}"><v>${s}</v></c>` : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlEsc(s)}</t></is></c>`;
+}
+
+function toXLSX(columns, rows) {
+  const enc = new TextEncoder();
+  const allRows = [columns, ...rows];
+  const sheetRows = allRows.map((r, ri) => `<row r="${ri + 1}">${r.map((v, ci) => xlsxCell(colLetter(ci) + (ri + 1), v)).join('')}</row>`).join('');
+  const lastCol = colLetter(Math.max(columns.length - 1, 0));
+  const sheetXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastCol}${allRows.length}"/><sheetData>${sheetRows}</sheetData></worksheet>`;
+  return makeZip([
+    { name: '[Content_Types].xml', data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`) },
+    { name: '_rels/.rels', data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`) },
+    { name: 'xl/workbook.xml', data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets></workbook>`) },
+    { name: 'xl/_rels/workbook.xml.rels', data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`) },
+    { name: 'xl/worksheets/sheet1.xml', data: enc.encode(sheetXML) },
+  ]);
 }
 
 function reportView() {
@@ -1946,7 +2042,7 @@ function reportView() {
     </div>
     <div class="card pad">
       <div class="actions" style="margin-top:0;margin-bottom:14px">
-        <button class="btn btn-primary btn-sm" onclick="downloadReport()">⬇ Download as Excel (CSV)</button>
+        <button class="btn btn-primary btn-sm" onclick="downloadReport()">⬇ Download as Excel</button>
         <span class="hint">${rows.length} row${rows.length === 1 ? '' : 's'}</span>
       </div>
       <div style="overflow-x:auto"><table class="master">
@@ -1965,12 +2061,11 @@ window.downloadReport = () => {
   const cab = S.reportType === 'cab';
   const columns = cab ? REPORT_COLS.cab : REPORT_COLS.intercity;
   const rows = cab ? buildCabReportRows() : buildIntercityReportRows();
-  const csv = toCSV(columns, rows);
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM so Excel reads UTF-8 names correctly
+  const blob = toXLSX(columns, rows);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `mkn-${cab ? 'cab' : 'intercity'}-report-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `mkn-${cab ? 'cab' : 'intercity'}-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();

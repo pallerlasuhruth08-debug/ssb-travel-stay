@@ -164,8 +164,10 @@
   .empty{text-align:center;padding:44px 20px;color:var(--muted)}
   .empty .big{font-family:'Cormorant Garamond',serif;font-size:22px;color:var(--ink);margin-bottom:4px}
   .divider{height:1px;background:var(--border);margin:18px 0}
-  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--ink);color:#fff;padding:13px 22px;border-radius:10px;font-size:14px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;transition:.35s;z-index:100;max-width:90vw}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);background:var(--ink);color:#fff;padding:13px 16px 13px 22px;border-radius:10px;font-size:14px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;transition:.35s;z-index:100;max-width:90vw;display:flex;align-items:center;gap:14px}
   .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+  .toast-close{background:none;border:0;color:#fff;opacity:.7;font-size:20px;line-height:1;cursor:pointer;padding:0 2px}
+  .toast-close:hover{opacity:1}
 
   /* sign-in + public traveller pages */
   .auth-wrap{max-width:430px;margin:0 auto;padding:52px 20px 90px}
@@ -206,7 +208,7 @@
 </head>
 <body>
 <div id="app"><div class="loading">Loading…</div></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast"><span id="toastMsg"></span><button class="toast-close" onclick="dismissToast()" aria-label="Dismiss">&times;</button></div>
 <script src="./vendor/supabase.js"></script>
 <script src="./app.js"></script>
 </body>
