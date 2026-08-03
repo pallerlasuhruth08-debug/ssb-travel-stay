@@ -1079,11 +1079,11 @@ function peopleTable(r) {
       <td>${esc(p.gender || '—')}</td>
       <td>${esc(p.category || '—')}</td>
       <td>${esc((isStaff() ? p.id_number : null) || p.id_number_masked || '—')}</td>
-      <td>${isStaff() && p.id_image_path ? `<a href="#" onclick="viewFile(event,'mkn-ids','${esc(p.id_image_path)}')">view</a>` : (p.id_image_path ? 'Uploaded' : '—')}</td>
+      <td>${isStaff() && p.id_image_path ? `<a href="#" onclick="viewFile(event,'mkn-ids','${esc(p.id_image_path)}')">view</a> · <a href="#" onclick="downloadFile(event,'mkn-ids','${esc(p.id_image_path)}')">download</a>` : (p.id_image_path ? 'Uploaded' : '—')}</td>
       <td>${esc(p.travel_mode || '—')}</td>
       <td>${esc(travelDetail(p) || '—')}</td>
       ${showPnr ? `<td>${esc(p.pnr || (needsTicket(p) ? '—' : 'own'))}</td>` : ''}
-      ${showTicket ? `<td>${p.ticket_path ? `<a href="#" onclick="viewFile(event,'mkn-tickets','${esc(p.ticket_path)}')">view</a>` : '—'}</td>` : ''}
+      ${showTicket ? `<td>${p.ticket_path ? `<a href="#" onclick="viewFile(event,'mkn-tickets','${esc(p.ticket_path)}')">view</a> · <a href="#" onclick="downloadFile(event,'mkn-tickets','${esc(p.ticket_path)}')">download</a>` : '—'}</td>` : ''}
       ${showBed ? `<td>${esc(p.bed_label || '—')}</td>` : ''}
     </tr>`).join('')}</tbody></table></div>`;
 }
@@ -1117,7 +1117,7 @@ function reqCard(r, inner) {
         <div class="v" style="font-size:14px;margin:2px 0 10px">${esc(r.plan)}</div>` : ''}
       ${r.rejection_reason ? `<div class="notice">Sent back: ${esc(r.rejection_reason)}</div>` : ''}
       ${peopleTable(r)}
-      ${r.ticket_path ? `<div class="hint" style="margin-bottom:8px">📎 <a href="#" onclick="viewFile(event,'mkn-tickets','${esc(r.ticket_path)}')">View booked ticket</a></div>` : ''}
+      ${r.ticket_path ? `<div class="hint" style="margin-bottom:8px">📎 <a href="#" onclick="viewFile(event,'mkn-tickets','${esc(r.ticket_path)}')">View booked ticket</a> · <a href="#" onclick="downloadFile(event,'mkn-tickets','${esc(r.ticket_path)}')">Download</a></div>` : ''}
       ${inner || ''}
     </div>
   </div>`;
@@ -1128,11 +1128,50 @@ window.toggleReq = id => {
   el('req-' + id)?.classList.toggle('open');
 };
 
+// Fetch the file through this already-loaded page's own network context instead of navigating
+// straight to the raw storage host -- some networks flag a fresh top-level navigation to the
+// sslip.io hostname as "Suspicious" and block it outright (confirmed 2026-08-03: the same signed
+// URL loads fine from the server but gets blocked from a filtered network), while a background
+// fetch from an already-trusted page more often gets through.
+async function fetchSignedBlob(bucket, path) {
+  const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 300);
+  if (error) throw new Error(error.message);
+  const resp = await fetch(data.signedUrl);
+  if (!resp.ok) throw new Error(`Could not load the file (HTTP ${resp.status}). Your network may be blocking access to the file server.`);
+  return resp.blob();
+}
+
 window.viewFile = async (e, bucket, path) => {
   e.preventDefault();
-  const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 300);
-  if (error) return toast(error.message);
-  window.open(data.signedUrl, '_blank');
+  // Open the tab synchronously, in direct response to the click, so browsers (Safari especially)
+  // don't treat it as a blocked popup once the async fetch below finishes.
+  const win = window.open('', '_blank');
+  try {
+    const blob = await fetchSignedBlob(bucket, path);
+    const blobUrl = URL.createObjectURL(blob);
+    if (win) win.location.href = blobUrl; else window.open(blobUrl, '_blank');
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  } catch (err) {
+    win?.close();
+    toast(err.message);
+  }
+};
+
+window.downloadFile = async (e, bucket, path) => {
+  e.preventDefault();
+  try {
+    const blob = await fetchSignedBlob(bucket, path);
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = path.split('/').pop();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    toast(err.message);
+  }
 };
 
 function listOrEmpty(items, innerFn, emptyMsg, cardFn = reqCard) {
