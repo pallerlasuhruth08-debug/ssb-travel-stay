@@ -1326,11 +1326,15 @@ function coordView() {
   const all = S.requests;
   const pending = all.filter(r => r.status === 'submitted');
   const approved = all.filter(r => r.status === 'approved');
+  const cancelled = all.filter(r => r.status === 'cancelled');
   const pax = all.reduce((n, r) => n + travellers(r).length, 0);
   const free = S.beds.filter(b => !b.traveller_id).length;
   const cabPending = S.cabRequests.filter(c => c.status === 'submitted');
   const cabApproved = S.cabRequests.filter(c => c.status === 'approved');
-  const onApproved = S.coordFilter === 'approved';
+  const cabCancelled = S.cabRequests.filter(c => c.status === 'cancelled');
+  const filter = S.coordFilter;
+  const onApproved = filter === 'approved';
+  const onCancelled = filter === 'cancelled';
 
   return `<div class="view active">
     <div class="view-head"><h2>Coordinator — review &amp; approve</h2>
@@ -1348,16 +1352,21 @@ function coordView() {
       <button class="${cab ? 'on' : ''}" onclick="setCoordType('cab')">Intracity cabs</button>
     </div>
     <div class="seg" style="margin-bottom:18px">
-      <button class="${!onApproved ? 'on' : ''}" onclick="setCoordFilter('review')">To review</button>
+      <button class="${!onApproved && !onCancelled ? 'on' : ''}" onclick="setCoordFilter('review')">To review</button>
       <button class="${onApproved ? 'on' : ''}" onclick="setCoordFilter('approved')">Approved</button>
+      <button class="${onCancelled ? 'on' : ''}" onclick="setCoordFilter('cancelled')">Cancelled</button>
     </div>
     ${cab
-      ? (onApproved
-          ? listOrEmpty(cabApproved, r => cabCoordInner(r, 'approved'), 'No approved cab requests yet.', cabCard)
-          : listOrEmpty(cabPending, r => cabCoordInner(r, 'review'), 'No cab requests waiting for review.', cabCard))
-      : (onApproved
-          ? listOrEmpty(approved, r => coordInner(r, 'approved'), 'No approved requests yet.')
-          : listOrEmpty(pending, r => coordInner(r, 'review'), 'No requests waiting for review.'))}
+      ? (onCancelled
+          ? listOrEmpty(cabCancelled, () => '', 'No cancelled cab requests.', cabCard)
+          : onApproved
+            ? listOrEmpty(cabApproved, r => cabCoordInner(r, 'approved'), 'No approved cab requests yet.', cabCard)
+            : listOrEmpty(cabPending, r => cabCoordInner(r, 'review'), 'No cab requests waiting for review.', cabCard))
+      : (onCancelled
+          ? listOrEmpty(cancelled, () => '', 'No cancelled requests.')
+          : onApproved
+            ? listOrEmpty(approved, r => coordInner(r, 'approved'), 'No approved requests yet.')
+            : listOrEmpty(pending, r => coordInner(r, 'review'), 'No requests waiting for review.'))}
   </div>`;
 }
 window.setCoordFilter = f => { S.coordFilter = f; render(); };
@@ -1510,12 +1519,16 @@ window.saveEdit = async id => {
 /* ---------------- 3 · travel desk & 4 · accommodation ---------------- */
 function deskView(which) {
   const isTravel = which === 'travel';
-  const done = S.deskFilter === 'done';
+  const filter = S.deskFilter; // 'pending' | 'done' | 'cancelled'
+  const done = filter === 'done';
+  const onCancelled = filter === 'cancelled';
   const cab = isTravel && S.travelType === 'cab';
 
   if (cab) {
-    const items = S.cabRequests.filter(c => done ? c.status === 'booked' : c.status === 'approved');
-    const emptyMsg = done ? 'No booked cabs yet.' : 'No approved cab requests waiting to be booked.';
+    const items = onCancelled
+      ? S.cabRequests.filter(c => c.status === 'cancelled')
+      : S.cabRequests.filter(c => done ? c.status === 'booked' : c.status === 'approved');
+    const emptyMsg = onCancelled ? 'No cancelled cab requests.' : (done ? 'No booked cabs yet.' : 'No approved cab requests waiting to be booked.');
     return `<div class="view active">
       <div class="view-head"><h2>Travel desk — book cabs</h2>
         <p>Approved cab requests await booking. Enter the driver's name, phone number and the vehicle number, then confirm to share the details with the POC.</p></div>
@@ -1524,10 +1537,11 @@ function deskView(which) {
         <button class="on" onclick="setTravelType('cab')">Intracity cabs</button>
       </div>
       <div class="seg" style="margin-bottom:18px">
-        <button class="${!done ? 'on' : ''}" onclick="setDeskFilter('pending')">Awaiting booking</button>
+        <button class="${!done && !onCancelled ? 'on' : ''}" onclick="setDeskFilter('pending')">Awaiting booking</button>
         <button class="${done ? 'on' : ''}" onclick="setDeskFilter('done')">Booked</button>
+        <button class="${onCancelled ? 'on' : ''}" onclick="setDeskFilter('cancelled')">Cancelled</button>
       </div>
-      ${listOrEmpty(items, cabTravelInner, emptyMsg, cabCard)}
+      ${listOrEmpty(items, onCancelled ? () => '' : cabTravelInner, emptyMsg, cabCard)}
     </div>`;
   }
 
@@ -1538,10 +1552,14 @@ function deskView(which) {
     : { t: 'Accommodation — allot beds', p: 'Approved and ticketed travellers can be housed. Pick a free bed from the master for each person as soon as the request is approved; the final confirm becomes available once the ticket is booked.' };
   const pendingStatuses = isTravel ? ['approved'] : ['approved', 'booked'];
   const doneStatuses = isTravel ? ['booked', 'complete'] : ['complete'];
-  const items = S.requests.filter(r => done ? doneStatuses.includes(r.status) : pendingStatuses.includes(r.status));
-  const emptyMsg = done
-    ? (isTravel ? 'No booked tickets yet.' : 'No housed travellers yet.')
-    : (isTravel ? 'No approved requests waiting for tickets.' : 'No approved requests waiting for a bed.');
+  const items = onCancelled
+    ? S.requests.filter(r => r.status === 'cancelled')
+    : S.requests.filter(r => done ? doneStatuses.includes(r.status) : pendingStatuses.includes(r.status));
+  const emptyMsg = onCancelled
+    ? 'No cancelled requests.'
+    : done
+      ? (isTravel ? 'No booked tickets yet.' : 'No housed travellers yet.')
+      : (isTravel ? 'No approved requests waiting for tickets.' : 'No approved requests waiting for a bed.');
   return `<div class="view active">
     <div class="view-head"><h2>${head.t}</h2><p>${head.p}</p></div>
     ${isTravel ? `<div class="seg" style="margin-bottom:10px">
@@ -1549,10 +1567,11 @@ function deskView(which) {
       <button class="" onclick="setTravelType('cab')">Intracity cabs</button>
     </div>` : ''}
     <div class="seg" style="margin-bottom:18px">
-      <button class="${!done ? 'on' : ''}" onclick="setDeskFilter('pending')">${isTravel ? 'Awaiting ticket' : 'Awaiting bed'}</button>
+      <button class="${!done && !onCancelled ? 'on' : ''}" onclick="setDeskFilter('pending')">${isTravel ? 'Awaiting ticket' : 'Awaiting bed'}</button>
       <button class="${done ? 'on' : ''}" onclick="setDeskFilter('done')">${isTravel ? 'Booked' : 'Housed'}</button>
+      <button class="${onCancelled ? 'on' : ''}" onclick="setDeskFilter('cancelled')">Cancelled</button>
     </div>
-    ${listOrEmpty(items, isTravel ? travelInner : accomInner, emptyMsg)}
+    ${listOrEmpty(items, onCancelled ? () => '' : (isTravel ? travelInner : accomInner), emptyMsg)}
   </div>`;
 }
 window.setDeskFilter = f => { S.deskFilter = f; render(); };
